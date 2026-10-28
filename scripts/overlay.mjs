@@ -24,6 +24,7 @@ export function startDisplay(report, onState = () => {}) {
     if (line === 'display-owner') onState({ overlay: 'running', overlayOwner: true });
     else if (line === 'display-visible') onState({ overlayVisible: true });
     else if (line === 'display-hidden') onState({ overlayVisible: false });
+    else if (line.startsWith('display-text\t')) onState({ displayedText: line.slice('display-text\t'.length) });
   });
   child.stdin.on('error', () => {});
   child.stderr.on('data', bytes => report(bytes.toString().slice(0, 1000)));

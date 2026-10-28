@@ -62,6 +62,10 @@ catch { fputs("Cannot create display lock directory\n", stderr); exit(1) }
 let fd = open(directory + "/display.lock", O_CREAT | O_RDWR | O_NOFOLLOW, S_IRUSR | S_IWUSR)
 if fd < 0 { fputs("Cannot open display lock\n", stderr); exit(1) }
 var ownsDisplay = false
+let inputLock = NSLock()
+var receivedText = ""
+var inputEnded = false
+let headless = CommandLine.arguments.contains("--headless")
 var reportedVisible: Bool?
 func reportVisibility(_ visible: Bool) {
     guard ownsDisplay, reportedVisible != visible else { return }
@@ -72,20 +76,26 @@ func reportVisibility(_ visible: Bool) {
 DispatchQueue.global().async {
     while let line = readLine() {
         if line.utf8.count <= 512 {
-            DispatchQueue.main.async { label.stringValue = line }
+            inputLock.lock(); receivedText = line; inputLock.unlock()
         }
     }
-    DispatchQueue.main.async { app.terminate(nil) }
+    inputLock.lock(); inputEnded = true; inputLock.unlock()
 }
 
 // CGWindow geometry is public and does not require reading the screen's pixels.
 let timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
+    inputLock.lock(); let text = receivedText; let ended = inputEnded; inputLock.unlock()
+    if ended { app.terminate(nil); return }
     if !ownsDisplay {
         ownsDisplay = flock(fd, LOCK_EX | LOCK_NB) == 0
         if ownsDisplay { print("display-owner"); fflush(stdout) }
     }
+    if ownsDisplay && label.stringValue != text {
+        label.stringValue = text
+        print("display-text\t" + label.stringValue); fflush(stdout)
+    }
     let codexPIDs = Set(NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex").map { $0.processIdentifier })
-    guard ownsDisplay, !label.stringValue.isEmpty,
+    guard ownsDisplay, !headless, !label.stringValue.isEmpty,
           let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
           let index = windows.firstIndex(where: {
               codexPIDs.contains($0[kCGWindowOwnerPID as String] as? Int32 ?? -1) &&
@@ -95,7 +105,7 @@ let timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
           let bounds = windowRect(windows[index]),
           let screen = NSScreen.screens.first
     else { panel.orderOut(nil); reportVisibility(false); return }
-    let strip = CGRect(x: bounds.midX - 165, y: bounds.maxY - 30, width: 330, height: 25)
+    let strip = CGRect(x: bounds.midX - 165, y: bounds.maxY - 40, width: 330, height: 25)
     guard !statusIsCovered(windows, before: index, frame: strip, ownPID: getpid()) else {
         panel.orderOut(nil); reportVisibility(false); return
     }

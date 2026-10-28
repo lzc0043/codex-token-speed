@@ -1,6 +1,6 @@
 {
   "name": "codex-token-speed",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "type": "module",
   "description": "Token/s and cache-hit readings for Codex Desktop on macOS and Windows",

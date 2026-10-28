@@ -4,11 +4,12 @@ import { SessionReader } from './metrics.mjs';
 import { ActiveSession } from './ipc.mjs';
 import { startDisplay, textFor } from './overlay.mjs';
 
+const version = '0.3.2';
 const home = process.env.CODEX_HOME || join(homedir(), '.codex');
 const headless = process.argv.includes('--headless');
 const reader = new SessionReader(home);
 let active, display, timer, busy = false, stopping = false, initialized = false;
-let state = { tps: null, cacheHit: null, status: 'starting', overlay: 'starting' };
+let state = { version, tps: null, cacheHit: null, status: 'starting', overlay: 'starting' };
 const report = message => { state.overlayError = message.trim(); process.stderr.write(`token-speed: ${message.trim()}\n`); };
 
 async function start() {
@@ -59,7 +60,7 @@ async function handle(request) {
     if (typeof p?.protocolVersion !== 'string' || !p.clientInfo || !p.capabilities) return error(-32602, 'Invalid initialize parameters');
     await start();
     return { result: { protocolVersion: versions.includes(p.protocolVersion) ? p.protocolVersion : versions[0],
-      capabilities: { tools: {} }, serverInfo: { name: 'codex-token-speed', version: '0.3.1' } } };
+      capabilities: { tools: {} }, serverInfo: { name: 'codex-token-speed', version } } };
   }
   if (method === 'ping') return { result: {} };
   if (method.startsWith('notifications/')) return null;

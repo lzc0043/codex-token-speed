@@ -8,10 +8,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
+const command = process.platform === 'win32' ? 'powershell.exe' : join(root, 'bin/token-speed-macos');
+const args = process.platform === 'win32' ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'native/overlay.ps1'), '-Headless'] : ['--headless'];
 test('native helpers own a single display, hand over ownership and exit on stdin EOF', { timeout: 30000 }, async t => {
   const home = await mkdtemp(join(tmpdir(), 'token-speed-native-'));
-  const command = process.platform === 'win32' ? 'powershell.exe' : join(root, 'bin/token-speed-macos');
-  const args = process.platform === 'win32' ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'native/overlay.ps1')] : [];
   const children = [];
   const diagnostics = [];
   t.signal.addEventListener('abort', () => { for (const child of children) child.kill(); });
@@ -34,4 +34,26 @@ test('native helpers own a single display, hand over ownership and exit on stdin
     assert.equal((await owners[1])[0], 'display-owner');
     const secondExit = once(children[1], 'exit'); children[1].stdin.end(); assert.equal((await secondExit)[0], 0, diagnostics[1]());
   } finally { for (const child of children) child.kill(); await rm(home, { recursive: true, force: true }); }
+});
+test('the native text control accepts and confirms successive metric updates', { timeout: 15000 }, async t => {
+  const home = await mkdtemp(join(tmpdir(), 'token-speed-text-'));
+  const child = spawn(command, args, { env: { ...process.env, CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  t.signal.addEventListener('abort', () => child.kill());
+  const lines = createInterface({ input: child.stdout });
+  const iterator = lines[Symbol.asyncIterator]();
+  let errors = ''; child.stderr.on('data', bytes => { errors += bytes; });
+  async function displayed() {
+    while (true) {
+      const row = await iterator.next();
+      assert.equal(row.done, false, errors);
+      if (row.value.startsWith('display-text\t')) return row.value.slice('display-text\t'.length);
+    }
+  }
+  try {
+    for (const text of ['42 t/s   ·   缓存命中 80.0%', '57 t/s   ·   缓存命中 90.0%', '']) {
+      child.stdin.write(text + '\n');
+      assert.equal(await displayed(), text);
+    }
+    const exited = once(child, 'exit'); child.stdin.end(); assert.equal((await exited)[0], 0, errors);
+  } finally { child.kill(); lines.close(); await rm(home, { recursive: true, force: true }); }
 });

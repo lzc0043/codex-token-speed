@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Router, Frames, frameJSON } from '../scripts/ipc.mjs';
+import { Router, Frames, frameJSON, ActiveSession } from '../scripts/ipc.mjs';
+import { createServer } from 'node:net';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { textFor } from '../scripts/overlay.mjs';
 const id = '00000000-0000-4000-8000-000000000001';
 const event = (conversationId = id, following = true, sourceClientId = 'window-one', hostId = 'local') => ({
@@ -34,4 +38,46 @@ test('UI shows speed and cache without an approximation symbol; missing data sta
   assert.equal(textFor({ tps: 42, cacheHit: 0 }), '42 t/s   ·   缓存命中 0.0%');
   assert.equal(textFor({ tps: null, cacheHit: null }), '');
   assert.equal(textFor({ tps: null, cacheHit: 80 }), '-- t/s   ·   缓存命中 80.0%');
+});
+test('refreshes missed selection notifications without dropping the current route', { timeout: 12000 }, async () => {
+  const home = await mkdtemp(join(tmpdir(), 'token-speed-ipc-'));
+  const path = process.platform === 'win32' ? `\\\\.\\pipe\\token-speed-test-${process.pid}` : join(home, 'ipc.sock');
+  const previous = process.env.CODEX_IPC_SOCKET;
+  const connections = new Set(); let selected = id, monitor, mainSocket, onProbe;
+  const server = createServer(socket => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket));
+    const parser = new Frames();
+    socket.on('data', bytes => parser.push(bytes, request => {
+      if (request.method !== 'initialize') return;
+      socket.write(frameJSON({ type: 'response', method: 'initialize', result: { clientId: 'test-monitor' } }));
+      socket.write(frameJSON(event(selected)));
+      if (!mainSocket) mainSocket = socket;
+      else if (onProbe) { const run = onProbe; onProbe = null; run(); }
+    }));
+  });
+  const waitFor = async predicate => {
+    const until = Date.now() + 7000;
+    while (!predicate() && Date.now() < until) await new Promise(r => setTimeout(r, 20));
+    assert.equal(predicate(), true, 'the current thread must recover after a missed notification');
+  };
+  try {
+    await new Promise(resolve => server.listen(path, resolve));
+    process.env.CODEX_IPC_SOCKET = path; monitor = new ActiveSession(home);
+    await waitFor(() => monitor.snapshot().threadId === id);
+    selected = id.slice(0, -1) + '2';
+    await waitFor(() => monitor.snapshot().threadId === selected);
+    assert.equal(monitor.snapshot().status, 'connected');
+    await waitFor(() => !monitor.refreshSocket);
+    const newer = id.slice(0, -1) + '3';
+    onProbe = () => { selected = newer; mainSocket.write(frameJSON(event(newer))); };
+    await monitor.refresh();
+    await waitFor(() => monitor.snapshot().threadId === newer);
+    await new Promise(resolve => setTimeout(resolve, 250));
+    assert.equal(monitor.snapshot().threadId, newer, 'a stale refresh must not overwrite a live switch');
+  } finally {
+    monitor?.close(); for (const socket of connections) socket.destroy();
+    await new Promise(resolve => server.close(resolve));
+    if (previous === undefined) delete process.env.CODEX_IPC_SOCKET; else process.env.CODEX_IPC_SOCKET = previous;
+    await rm(home, { recursive: true, force: true });
+  }
 });

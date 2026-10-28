@@ -1,5 +1,7 @@
+param([switch]$Headless)
 $ErrorActionPreference = 'Stop'
 [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 $source = @'
 using System;
@@ -18,6 +20,7 @@ public class TokenSpeedOverlay : Form {
     readonly Label label = new Label();
     readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
     readonly Mutex mutex;
+    readonly bool headless;
     volatile string text = "";
     volatile bool ended;
     bool ownsDisplay;
@@ -31,7 +34,8 @@ public class TokenSpeedOverlay : Form {
     protected override CreateParams CreateParams {
         get { var p = base.CreateParams; p.ExStyle |= 0x08000000 | 0x00000080 | 0x00000020; return p; }
     }
-    public TokenSpeedOverlay() {
+    public TokenSpeedOverlay(bool suppressWindow) {
+        headless = suppressWindow;
         FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true;
         BackColor = Color.Magenta; TransparencyKey = BackColor; AllowTransparency = true; Size = new Size(350, 26);
         AccessibleName = "Codex Token Speed: approximate t/s and cache hit rate";
@@ -40,7 +44,12 @@ public class TokenSpeedOverlay : Form {
         label.BackColor = Color.Transparent; label.ForeColor = Color.Gray; label.Font = new Font("Segoe UI", 9);
         Controls.Add(label);
         string user = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value;
-        mutex = new Mutex(false, "Local\\CodexTokenSpeed-" + user);
+        string home = Environment.GetEnvironmentVariable("CODEX_HOME") ?? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex");
+        string key;
+        using (var hash = System.Security.Cryptography.SHA256.Create()) {
+            key = BitConverter.ToString(hash.ComputeHash(System.Text.Encoding.UTF8.GetBytes(System.IO.Path.GetFullPath(home).ToUpperInvariant()))).Replace("-", "");
+        }
+        mutex = new Mutex(false, "Local\\CodexTokenSpeed-" + user + "-" + key);
         var reader = new Thread(() => {
             try { string line; while ((line = Console.ReadLine()) != null) if (line.Length <= 512) text = line; }
             finally { ended = true; }
@@ -54,6 +63,9 @@ public class TokenSpeedOverlay : Form {
             try { ownsDisplay = mutex.WaitOne(0); } catch (AbandonedMutexException) { ownsDisplay = true; }
             if (ownsDisplay) { Console.WriteLine("display-owner"); Console.Out.Flush(); }
         }
+        if (ownsDisplay && label.Text != text) {
+            label.Text = text; Console.WriteLine("display-text\t" + label.Text); Console.Out.Flush();
+        }
         var h = GetForegroundWindow(); uint id; GetWindowThreadProcessId(h, out id);
         bool codex = false;
         try {
@@ -61,8 +73,8 @@ public class TokenSpeedOverlay : Form {
             codex = name.Equals("Codex", StringComparison.OrdinalIgnoreCase) || name.Equals("ChatGPT", StringComparison.OrdinalIgnoreCase);
         } catch (Exception) { codex = false; }
         Rect r;
-        if (!ownsDisplay || text.Length == 0 || !codex || IsIconic(h) || !GetWindowRect(h, out r) || r.Right-r.Left < 500) { Hide(); ReportVisibility(false); return; }
-        label.Text = text; Location = new Point(r.Left + (r.Right-r.Left-Width)/2, r.Bottom-Height-5);
+        if (!ownsDisplay || headless || text.Length == 0 || !codex || IsIconic(h) || !GetWindowRect(h, out r) || r.Right-r.Left < 500) { Hide(); ReportVisibility(false); return; }
+        Location = new Point(r.Left + (r.Right-r.Left-Width)/2, r.Bottom-Height-15);
         if (!Visible) Show();
         ReportVisibility(Visible);
     }
@@ -72,11 +84,11 @@ public class TokenSpeedOverlay : Form {
         }
         base.Dispose(disposing);
     }
-    public static void Run() {
+    public static void Run(bool headless) {
         SetProcessDPIAware(); Application.EnableVisualStyles();
-        using (var form = new TokenSpeedOverlay()) { Application.Run(); }
+        using (var form = new TokenSpeedOverlay(headless)) { Application.Run(); }
     }
 }
 '@
 Add-Type -TypeDefinition $source -ReferencedAssemblies System.Windows.Forms, System.Drawing
-[TokenSpeedOverlay]::Run()
+[TokenSpeedOverlay]::Run($Headless.IsPresent)

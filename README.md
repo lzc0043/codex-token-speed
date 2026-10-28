@@ -14,7 +14,7 @@
 请阅读 https://github.com/lzc0043/codex-token-speed 的 README，先检查并复用兼容的现有 Node.js 环境，帮我安装并启用 Codex Token 速度计，并调用 token_speed_status 验证 MCP 连接状态。
 ```
 
-**Node.js 版本：推荐 22 或 24，已有 24 无需切换到 22。** Node.js 20.20.2 和 24.22.1 已在 macOS 上分别通过全部 19 项测试，22 已通过 macOS / Windows CI；尚未验证 Windows 上的 20、24。Node 20 的其他补丁版本未逐一测试，且该版本系列已[停止官方维护](https://nodejs.org/en/about/previous-releases)，因此新安装推荐使用 Node.js 24 LTS。
+**Node.js 版本：推荐 22 或 24，已有 24 无需切换到 22。** Node.js 20.20.2 和 24.22.1 已在 macOS 上通过基础兼容性测试，22 已通过 macOS / Windows CI；尚未验证 Windows 上的 20、24。Node 20 的其他补丁版本未逐一测试，且该版本系列已[停止官方维护](https://nodejs.org/en/about/previous-releases)，因此新安装推荐使用 Node.js 24 LTS。
 
 1. 运行 `node --version` 检查现有环境，按上述兼容情况复用；未安装时，安装 [Node.js 24 LTS](https://nodejs.org/)，确保 Codex 能找到 `node`。
 2. 在 Codex 的插件管理中添加本仓库作为插件来源，安装并启用 **Codex Token 速度计**。仓库已包含 `.agents/plugins/marketplace.json`、`plugin.json` 和 `mcp.json`。
@@ -33,7 +33,7 @@ codex plugin add codex-token-speed@codex-token-speed-local
 
 ## 使用和统计口径
 
-状态条使用透明背景和较小的灰色文字，贴合 Codex 窗口底部，随窗口移动；不抢焦点，点击穿透。macOS 在 Codex 可见、状态条区域未被其他窗口覆盖时显示，失去焦点不会直接隐藏；Windows 切换其他应用时隐藏。它是原生附着窗口。Codex 没有公开的输入栏扩展接口，因此位置无法完全复刻 DeepSeek Harness 的输入栏组件。
+状态条使用透明背景和较小的灰色文字，距 Codex 窗口底边 15 点（较旧版上移 10 点），随窗口移动；不抢焦点，点击穿透。macOS 在 Codex 可见、状态条区域未被其他窗口覆盖时显示，失去焦点不会直接隐藏；Windows 切换其他应用时隐藏。它是原生附着窗口。Codex 没有公开的输入栏扩展接口，因此位置无法完全复刻 DeepSeek Harness 的输入栏组件。
 
 | 显示 | 含义 |
 | --- | --- |
@@ -47,14 +47,14 @@ codex plugin add codex-token-speed@codex-token-speed-local
 
 ## 状态查询与退出
 
-向 Codex 说“查询 Token 速度计状态”，可调用只读工具 `token_speed_status` 查看连接、显示权（overlayOwner）及原生窗口可见状态（overlayVisible）；overlay 为 standby 表示另一实例持有显示权。它只返回指标和诊断状态，不返回聊天正文。
+向 Codex 说“查询 Token 速度计状态”，可调用只读工具 `token_speed_status` 查看连接、版本、显示权（overlayOwner）、原生窗口可见状态（overlayVisible）和控件实际收到的文字（displayedText）；overlay 为 standby 表示另一实例持有显示权。它只返回指标和诊断状态，不返回聊天正文。
 
 禁用插件或退出宿主 MCP 会话后，其显示进程随 stdin EOF 退出。多个 MCP 会话可存在，但原生锁保证只显示一条状态条，持有者退出后另一个接替。插件不注册系统开机自启。
 
 ## 数据与已知限制
 
 - 只在本机读取 `CODEX_HOME`（默认 `~/.codex`）下的会话 JSONL，以及 Codex 本机 IPC 的当前会话事件；不读取认证文件、不上传数据。
-- 当前会话选择依赖未稳定公开的 Codex IPC，客户端更新可能需要适配；断连、远程聊天和多窗口不猜测其他会话。MCP 生命周期由 Codex 控制，首次连接可能随聊天加载发生。
+- 当前会话选择依赖未稳定公开的 Codex IPC，客户端更新可能需要适配；每 5 秒重新核对选中会话，补偿遗漏的切换事件；断连、远程聊天和多窗口不猜测其他会话。MCP 生命周期由 Codex 控制，首次连接可能随聊天加载发生。
 - macOS 使用 AppKit，Windows 使用系统 WinForms。未签发开发者证书或 Apple 公证；系统安全策略可能要求首次允许。Windows 受企业 PowerShell 策略限制。
 - 速度不是 DeepSeek 的真实首 token 解码速度。不能从缺失时间戳的日志还原该值，界面按用户偏好省略近似符号，统计口径仍为估算，缺失数据不编造数值。
 
