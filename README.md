@@ -8,6 +8,12 @@
 
 ## 安装
 
+复制下面这句话发给 Codex 或其他 Agent，让它帮你安装：
+
+```text
+请阅读 https://github.com/lzc0043/codex-token-speed 的 README，检查 Node.js 22+ 环境，帮我安装并启用 Codex Token 速度计，并调用 token_speed_status 验证 MCP 连接状态。
+```
+
 1. 安装 [Node.js 22 或更新版本](https://nodejs.org/)，确保 Codex 能找到 `node`。
 2. 在 Codex 的插件管理中添加本仓库作为插件来源，安装并启用 **Codex Token 速度计**。仓库已包含 `.agents/plugins/marketplace.json`、`plugin.json` 和 `mcp.json`。
 3. 打开一个本地聊天。状态条由 MCP 启动，不需要输入启动指令。如果当前聊天没有刷新插件，重新打开聊天或重启 Codex 一次。
