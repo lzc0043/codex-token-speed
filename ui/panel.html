@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token 速度计</title>
+<style>
+  :root{color-scheme:light dark;font-family:system-ui,sans-serif;color:light-dark(#252525,#e8e8e8);background:transparent}
+  *{box-sizing:border-box}body{margin:0;padding:20px}h1{font-size:15px;font-weight:600;margin:0 0 22px}
+  .metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}dt{font-size:12px;color:light-dark(#707070,#aaa);margin-bottom:8px}
+  .metrics dl{min-width:0}dd{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:30px;font-weight:550;font-variant-numeric:tabular-nums;letter-spacing:-.03em}
+  .unit{font-size:13px;letter-spacing:0;font-weight:400;color:light-dark(#707070,#aaa);margin-left:5px}
+  #speed[data-stale="true"]{opacity:.55}#phase{margin:20px 0 8px;font-size:12px;line-height:1.6;color:light-dark(#707070,#aaa)}
+  footer{font-size:11px;line-height:1.6;color:light-dark(#888,#999)}dl{margin:0}
+  @media(max-width:280px){body{padding:16px}.metrics{grid-template-columns:1fr;gap:22px}}
+</style>
+<h1>Token 速度计</h1>
+<main>
+  <div class="metrics">
+    <dl><dt>输出速度</dt><dd id="speed" data-stale="true"><span id="tps">--</span><span class="unit">t/s</span></dd></dl>
+    <dl><dt>会话缓存命中率</dt><dd><span id="cache">--</span><span class="unit">%</span></dd></dl>
+  </div>
+  <p id="phase" role="status" aria-live="polite">正在连接…</p>
+  <footer>速度为日志窗口估算；工具执行时保留上次有效速度。</footer>
+</main>
+<script>
+(() => {
+  const speed = document.getElementById('speed'), tps = document.getElementById('tps');
+  const cache = document.getElementById('cache'), phase = document.getElementById('phase');
+  const pending = new Map(); let nextId = 1, timer, stopped = false, ready = false, polling = false, origin;
+  const send = message => window.parent.postMessage({ jsonrpc: '2.0', ...message }, '*');
+  function request(method, params) {
+    return new Promise((resolve, reject) => {
+      const id = nextId++;
+      const deadline = setTimeout(() => { pending.delete(id); reject(Error('timeout')); }, 8000);
+      pending.set(id, { resolve, reject, deadline }); send({ id, method, params });
+    });
+  }
+  function render(state) {
+    if (!state || typeof state !== 'object' || Array.isArray(state)) return;
+    const validSpeed = Number.isFinite(state.tps) && state.tps >= 0;
+    const validCache = Number.isFinite(state.cacheHit) && state.cacheHit >= 0 && state.cacheHit <= 100;
+    tps.textContent = validSpeed ? state.tps.toFixed(0) : '--';
+    cache.textContent = validCache ? state.cacheHit.toFixed(1) : '--';
+    speed.dataset.stale = String(!state.speedFresh || state.activity === 'tool');
+    const phases = { idle: '闲置', generating: '模型请求中', tool: '执行工具', complete: '已完成' };
+    const reasons = { 'no-sample': '尚无有效测速', 'awaiting-usage': '等待完整用量', tool: '工具请求暂不测速',
+      'incomplete-window': '计时窗口不完整', 'ambiguous-window': '用量与计时无法可靠配对', 'invalid-usage': '用量记录不完整', 'context-changed': '模型或推理档位已变化' };
+    const connections = { 'waiting-session': '等待当前聊天', 'multiple-windows': '多窗口，尚未确认聊天', 'remote-session': '远程聊天暂不支持', disconnected: '正在连接当前聊天', error: '暂时无法读取指标' };
+    const reason = !state.speedFresh && reasons[state.speedReason];
+    phase.textContent = connections[state.status] || `${phases[state.activity] || '等待数据'}${validSpeed && !state.speedFresh ? ' · 上次有效速度' : ''}${reason ? ' · ' + reason : ''}`;
+    const sampled = typeof state.speedUpdatedAt === 'string' && Number.isFinite(Date.parse(state.speedUpdatedAt));
+    speed.title = sampled ? `最近有效采样：${new Date(state.speedUpdatedAt).toLocaleString()}（${state.model || '模型未知'} / ${state.effort || '档位未知'}）` : '尚无有效采样时间';
+  }
+  function disconnected() { speed.dataset.stale = 'true'; phase.textContent = '连接暂时中断，保留上次数据'; }
+  function stop() {
+    stopped = true; clearTimeout(timer);
+    for (const item of pending.values()) { clearTimeout(item.deadline); item.reject(Error('closed')); }
+    pending.clear();
+  }
+  async function poll() {
+    if (stopped || !ready || polling || document.visibilityState === 'hidden') return;
+    clearTimeout(timer); polling = true;
+    try {
+      const result = await request('tools/call', { name: 'token_speed_status', arguments: {} });
+      if (result?.isError || !result?.structuredContent) throw Error('unavailable');
+      render(result.structuredContent);
+    } catch { if (!stopped) disconnected(); }
+    finally { polling = false; if (!stopped) timer = setTimeout(poll, 1000); }
+  }
+  window.addEventListener('message', event => {
+    if (event.source !== window.parent || (origin !== undefined && event.origin !== origin)) return;
+    const message = event.data;
+    if (!message || message.jsonrpc !== '2.0' || typeof message !== 'object') return;
+    if (Number.isInteger(message.id) && pending.has(message.id)) {
+      origin ??= event.origin;
+      const item = pending.get(message.id); pending.delete(message.id); clearTimeout(item.deadline);
+      if (message.error) item.reject(Error('host error')); else item.resolve(message.result);
+    } else if (message.method === 'ui/notifications/tool-result') render(message.params?.structuredContent);
+    else if (message.method === 'ui/notifications/host-context-changed') {
+      const theme = message.params?.theme;
+      if (theme === 'dark' || theme === 'light') document.documentElement.style.colorScheme = theme;
+    } else if (message.method === 'ui/resource-teardown' && Number.isInteger(message.id)) { stop(); send({ id: message.id, result: {} }); }
+  });
+  window.addEventListener('pagehide', stop);
+  document.addEventListener('visibilitychange', () => { clearTimeout(timer); if (document.visibilityState !== 'hidden') poll(); });
+  (async () => {
+    if (window.parent === window) { phase.textContent = '请在会话侧面板中打开'; return; }
+    try {
+      const initialized = await request('ui/initialize', { appInfo: { name: 'codex-token-speed', version: '0.4.0-preview.3' }, appCapabilities: {}, protocolVersion: '2026-01-26' });
+      if (initialized?.protocolVersion !== '2026-01-26') throw Error('unsupported');
+      const theme = initialized.hostContext?.theme;
+      if (theme === 'dark' || theme === 'light') document.documentElement.style.colorScheme = theme;
+      ready = true;
+      send({ method: 'ui/notifications/initialized' }); poll();
+    } catch { if (!stopped) { disconnected(); phase.textContent = '客户端未能加载面板，请重新打开后重试'; } }
+  })();
+})();
+</script>
+</html>

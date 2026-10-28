@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { messageFor, textFor } from '../scripts/overlay.mjs';
+import { Usage } from '../scripts/metrics.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const command = process.platform === 'win32' ? 'powershell.exe' : join(root, 'bin/token-speed-macos');
 const args = process.platform === 'win32' ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'native/overlay.ps1'), '-Headless'] : ['--headless'];
@@ -59,6 +60,8 @@ test('the native text control accepts and confirms successive metric updates', {
       { tps: 33, cacheHit: 98.4, activity: 'generating', speedFresh: false },
       { tps: 33, cacheHit: 98.4, activity: 'generating', speedFresh: true },
       { tps: 33, cacheHit: 98.4, activity: 'tool', speedFresh: false },
+      { tps: 33, cacheHit: 98.4, activity: 'complete', speedFresh: false },
+      { tps: 33, cacheHit: 98.4, activity: 'idle', speedFresh: false },
       ...[33, 146, 1079].map(tps => ({ tps, cacheHit: 98.4, activity: 'complete', speedFresh: true })),
       { activity: 'generating' }, { activity: 'idle' },
     ]) {
@@ -71,7 +74,7 @@ test('the native text control accepts and confirms successive metric updates', {
       assert.ok(layout.fontSize >= (process.platform === 'win32' ? 9 : 11));
       assert.equal(layout.activity, state.activity);
       assert.equal(layout.speedFresh, state.speedFresh === true);
-      assert.equal(layout.muted, state.activity === 'tool' || (state.activity === 'generating' && !state.speedFresh));
+      assert.equal(layout.muted, state.activity === 'tool' || !state.speedFresh);
       if (state.activity !== 'generating') { assert.equal(layout.animating, false); assert.equal(layout.pulseAlpha, 1); }
       assert.ok(Math.abs(layout.unitX-layout.speedX-layout.speedWidth) < 1, 'unit must follow the measured number without a reserved gap');
       assert.ok(layout.speedX-layout.iconEnd <= 8, 'the number must sit next to the gauge');
@@ -79,6 +82,23 @@ test('the native text control accepts and confirms successive metric updates', {
       const columns = [layout.unitX, layout.speedGroupEnd, layout.cacheGroupX, layout.cacheX, layout.cacheWidth];
       if (!initial) initial = columns; else assert.deepEqual(columns, initial, 'unit, separator and cache columns must not move as the speed gains digits');
     }
+    const metrics = new Usage();
+    const model = (start, end, type = 'AgentMessage') => ({ type: 'event_msg', payload: { type: 'item_completed', item: { type }, started_at_ms: start, completed_at_ms: end } });
+    const usage = (n, cached = n*80, output = 20) => ({ type: 'token_usage_record', payload: {
+      usage: { output_tokens: output, reasoning_output_tokens: 0 },
+      thread_token_usage: { input_tokens: n*100, cached_input_tokens: cached, output_tokens: n*20, total_tokens: n*120 },
+    } });
+    metrics.ingest(model(0, 2000)); metrics.ingest(usage(1));
+    child.stdin.write(messageFor(metrics.snapshot())+'\n');
+    assert.equal(await displayed(), '10 t/s   ·   会话缓存 80.0%'); assert.equal(layout.muted, false);
+    metrics.ingest(model(3000, 3832, 'Reasoning'));
+    metrics.ingest({ type: 'response_item', payload: { type: 'function_call', call_id: 'a' } }); metrics.ingest(usage(2, 140));
+    child.stdin.write(messageFor(metrics.snapshot())+'\n');
+    assert.equal(await displayed(), '10 t/s   ·   会话缓存 70.0%'); assert.equal(layout.muted, true);
+    metrics.ingest({ type: 'response_item', payload: { type: 'function_call_output', call_id: 'a' } });
+    metrics.ingest(model(5000, 7000)); metrics.ingest(usage(3, 240, 60));
+    child.stdin.write(messageFor(metrics.snapshot())+'\n');
+    assert.equal(await displayed(), '30 t/s   ·   会话缓存 80.0%'); assert.equal(layout.muted, false);
     const pulses = [];
     for (let i = 0; i < 8; i++) {
       await new Promise(resolve => setTimeout(resolve, 210));

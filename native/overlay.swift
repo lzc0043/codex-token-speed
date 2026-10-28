@@ -133,7 +133,7 @@ func updateColors() {
 func updateActivity() {
     animating = activity == "generating" && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     gaugeIcon.alphaValue = animating ? 0.8 + 0.2 * sin(ProcessInfo.processInfo.systemUptime * .pi / 0.9) : 1
-    let muted = activity == "tool" || (activity == "generating" && !speedFresh)
+    let muted = activity == "tool" || !speedFresh
     speedField.alphaValue = muted ? 0.55 : 1; unitField.alphaValue = speedField.alphaValue
 }
 func savePreview() {

@@ -4,7 +4,7 @@
     "token-speed": {
       "type": "stdio",
       "command": "node",
-      "args": ["${PLUGIN_ROOT}/scripts/server.mjs"],
+      "args": ["${PLUGIN_ROOT}/scripts/server.mjs", "--panel"],
       "cwd": "${PLUGIN_ROOT}"
     }
   }

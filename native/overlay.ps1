@@ -130,7 +130,7 @@ public class TokenSpeedOverlay : Form {
         animating = activity == "generating" && SystemParametersInfo(0x1042, 0, out animations, 0) && animations;
         gaugeIcon.ImageAlpha = animating ? (float)(0.8 + 0.2 * Math.Sin(Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency * Math.PI / 0.9)) : 1;
         gaugeIcon.Invalidate();
-        muted = activity == "tool" || (activity == "generating" && !speedFresh);
+        muted = activity == "tool" || !speedFresh;
         speedField.ForeColor = muted ? Color.FromArgb((numberColor.R+mutedColor.R)/2, (numberColor.G+mutedColor.G)/2, (numberColor.B+mutedColor.B)/2) : numberColor;
         AccessibleDescription = activity + (speedFresh ? "; recent approximate speed" : "; previous approximate speed");
     }

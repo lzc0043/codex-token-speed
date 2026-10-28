@@ -1,6 +1,6 @@
 {
   "name": "codex-token-speed",
-  "version": "0.3.6",
+  "version": "0.4.0-preview.3",
   "private": true,
   "type": "module",
   "description": "Token/s and cache-hit readings for Codex Desktop on macOS and Windows",
@@ -8,7 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test test/metrics.test.mjs test/ipc.test.mjs test/server.test.mjs",
+    "test": "node --test test/metrics.test.mjs test/ipc.test.mjs test/server.test.mjs test/panel.test.mjs",
     "test:native": "node --test test/native.test.mjs",
     "build:mac": "bash scripts/build-mac.sh"
   }

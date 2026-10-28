@@ -11,16 +11,29 @@ export class Usage {
   constructor() { this.reset(null); }
   reset(turnId) {
     Object.assign(this, { turnId, completed: false, activity: turnId ? 'generating' : 'idle', speedFresh: false,
+      speedReason: turnId ? 'awaiting-usage' : 'no-sample', speedUpdatedAt: this.speedUpdatedAt ?? null,
+      model: this.model ?? null, effort: this.effort ?? null, responses: this.responses ?? new Set(),
       tools: new Set(), runningTools: new Set(), tps: this.tps ?? null, cache: this.cache ?? null, previousEnd: null, seen: this.seen ?? new Set() });
     this.clearWindow();
   }
-  clearWindow() { this.first = null; this.last = null; this.toolStart = null; }
+  clearWindow() {
+    this.first = null; this.last = null; this.toolStart = null; this.messageEnd = null;
+    this.reasoningComplete = false; this.windowHasTool = false; this.windowInvalid = false;
+    this.pendingModels = new Set(); this.observedModels = new Set(); this.windowAmbiguous = false; this.upgradePending = false;
+  }
   ingest(record) {
     const p = record?.payload;
     if (!p || typeof p !== 'object') return;
     if (record.type === 'turn_context' || (record.type === 'event_msg' && p.type === 'task_started')) {
       if (typeof p.turn_id !== 'string') return;
       if (this.turnId !== p.turn_id) this.reset(p.turn_id);
+      if (record.type === 'turn_context' && typeof p.model === 'string' && p.model.length <= 128) {
+        const effort = typeof p.effort === 'string' && p.effort.length <= 128 ? p.effort : null;
+        if (this.model !== p.model || this.effort !== effort) {
+          this.model = p.model; this.effort = effort; this.tps = null; this.speedUpdatedAt = null;
+          this.speedFresh = false; this.speedReason = 'context-changed'; this.clearWindow();
+        }
+      }
       return;
     }
     if (this.turnId && p.turn_id && p.turn_id !== this.turnId) return;
@@ -33,12 +46,17 @@ export class Usage {
       }
       return;
     }
+    // Tool argument tokens have no matching completed generation window in these logs.
+    if (record.type === 'response_item' && ['function_call', 'custom_tool_call'].includes(p.type)) {
+      this.windowHasTool = true; this.speedReason = 'tool'; this.speedFresh = false;
+    }
     if (record.type === 'response_item' && !this.completed && typeof p.call_id === 'string' && p.call_id.length <= 512) {
       if (['function_call', 'custom_tool_call'].includes(p.type)) {
         if (this.tools.size < 256) this.tools.add(p.call_id);
         this.activity = 'tool'; this.speedFresh = false;
       } else if (['function_call_output', 'custom_tool_call_output'].includes(p.type) && this.tools.delete(p.call_id)) {
         this.activity = this.tools.size || this.runningTools.size ? 'tool' : 'generating'; this.speedFresh = false;
+        this.speedReason = this.activity === 'tool' ? 'tool' : 'awaiting-usage';
       }
       return;
     }
@@ -50,13 +68,32 @@ export class Usage {
         if (p.type === 'item_started' && this.runningTools.size < 256) { this.runningTools.add(p.item.id); this.speedFresh = false; }
         else if (p.type === 'item_completed') this.runningTools.delete(p.item.id);
         this.activity = this.tools.size || this.runningTools.size ? 'tool' : 'generating';
+        this.speedReason = this.activity === 'tool' ? 'tool' : 'awaiting-usage';
       }
+      if (toolItems.has(type) && this.first !== null && (start === null || start >= this.first)) this.windowHasTool = true;
+      if (modelItems.has(type) && start === null) { this.windowInvalid = true; this.speedFresh = false; }
       if (start === null || (this.previousEnd !== null && start < this.previousEnd)) return;
       if (modelItems.has(type)) {
+        // A same-usage carrier upgrade is ambiguous; never join its window to a later response.
+        if (this.upgradePending) this.clearWindow();
         if (!this.completed && !this.tools.size && !this.runningTools.size) this.activity = 'generating';
-        if (!this.completed && this.first === null) this.speedFresh = false;
+        if (!this.completed && this.first === null) { this.speedFresh = false; this.speedReason = 'awaiting-usage'; }
         this.first = this.first === null ? start : Math.min(this.first, start);
-        if (end !== null && end >= start) this.last = Math.max(this.last ?? end, end);
+        const key = `${type}:${typeof p.item.id === 'string' && p.item.id.length <= 512 ? p.item.id : start}`;
+        // Logs do not link model items to response IDs; reject unpaired successive answers.
+        if (this.messageEnd !== null && start >= this.messageEnd && !this.observedModels.has(key)) this.windowAmbiguous = true;
+        if (this.observedModels.size < 256) this.observedModels.add(key);
+        else this.windowInvalid = true;
+        if (p.type === 'item_started') {
+          if (this.pendingModels.size < 256) this.pendingModels.add(key);
+          else this.windowInvalid = true;
+        }
+        if (p.type === 'item_completed' && end !== null && end >= start) {
+          this.pendingModels.delete(key);
+          this.last = Math.max(this.last ?? end, end);
+          if (type === 'AgentMessage') this.messageEnd = Math.max(this.messageEnd ?? end, end);
+          if (type === 'Reasoning') this.reasoningComplete = true;
+        } else if (p.type === 'item_completed') this.windowInvalid = true;
       } else if (toolItems.has(type) && this.first !== null && start >= this.first) {
         this.toolStart = this.toolStart === null ? start : Math.min(this.toolStart, start);
       }
@@ -67,7 +104,7 @@ export class Usage {
       if (this.turnId && p.turn_id && p.turn_id !== this.turnId) return;
       usage = p.usage;
       cumulative = p.thread_token_usage;
-      upgrade = !this.modernSeen && this.lastCarrier === 'legacy' && this.first === null;
+      upgrade = !this.modernSeen && this.lastCarrier === 'legacy';
       this.modernSeen = true;
     } else if (record.type === 'event_msg' && p.type === 'token_count') {
       // These carriers may have different cumulative scope after forks/resumes.
@@ -77,34 +114,54 @@ export class Usage {
     } else return;
     if (!usage || !cumulative) return;
     const counts = ['input_tokens', 'cached_input_tokens', 'output_tokens', 'total_tokens'].map(k => number(cumulative[k]));
-    if (counts.some(n => n === null)) { this.tps = null; this.cache = null; this.speedFresh = false; this.clearWindow(); return; }
+    const responseId = record.type === 'token_usage_record' && typeof p.response_id === 'string' && p.response_id.length > 0 && p.response_id.length <= 512 ? p.response_id : null;
+    const duplicate = responseId !== null && this.responses.has(responseId);
+    if (duplicate && responseId !== this.cacheResponse) return;
+    if (duplicate) {
+      const [input, cached] = counts;
+      this.cache = input > 0 && cached !== null && cached <= input ? cached / input * 100 : null;
+      return;
+    }
+    if (responseId !== null) {
+      this.responses.add(responseId);
+      if (this.responses.size > 256) this.responses.delete(this.responses.values().next().value);
+    }
+    if (counts.some(n => n === null)) { this.cacheResponse = responseId; this.cache = null; this.speedFresh = false; this.speedReason = 'invalid-usage'; this.clearWindow(); return; }
     const key = counts.join(':');
-    if (this.seen.has(key)) return;
+    if (responseId === null && this.seen.has(key)) return;
     this.seen.add(key);
     if (this.seen.size > 256) this.seen.delete(this.seen.values().next().value);
     const [input, cached] = counts;
     const output = number(usage.output_tokens);
+    this.cacheResponse = responseId;
     this.cache = input > 0 && cached !== null && cached <= input ? cached / input * 100 : null;
     const request = JSON.stringify(['input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens'].map(k => usage[k] ?? null));
     const sameLegacyRequest = upgrade && request === this.lastRequest;
     this.lastCarrier = record.type === 'token_usage_record' ? 'modern' : 'legacy';
     this.lastRequest = request;
-    if (sameLegacyRequest) return;
+    if (sameLegacyRequest) { this.upgradePending = this.first !== null; return; }
     const end = this.last === null && this.toolStart === null ? null : Math.max(this.last ?? 0, this.toolStart ?? 0);
     const elapsed = end === null || this.first === null ? null : end - this.first;
-    this.tps = elapsed > 0 && output > 0 ? output * 1000 / elapsed : null;
-    if (!Number.isFinite(this.tps)) this.tps = null;
-    this.speedFresh = this.tps !== null;
+    const complete = !this.windowHasTool && !this.windowInvalid && !this.windowAmbiguous && !this.pendingModels.size && this.messageEnd !== null && this.messageEnd === this.last &&
+      (!(number(usage.reasoning_output_tokens) > 0) || this.reasoningComplete);
+    const speed = complete && elapsed > 0 && output > 0 ? output * 1000 / elapsed : null;
+    this.speedFresh = Number.isFinite(speed);
+    this.speedReason = this.speedFresh ? 'valid' : this.windowHasTool ? 'tool' : this.windowAmbiguous ? 'ambiguous-window' : 'incomplete-window';
+    if (this.speedFresh) {
+      this.tps = speed;
+      this.speedUpdatedAt = typeof record.timestamp === 'string' && Number.isFinite(Date.parse(record.timestamp)) ? new Date(record.timestamp).toISOString() : null;
+    }
     if (end !== null) this.previousEnd = end;
     this.clearWindow();
   }
-  snapshot() { return { tps: this.tps, cacheHit: this.cache, completed: this.completed, activity: this.activity, speedFresh: this.speedFresh }; }
+  snapshot() { return { tps: this.tps, cacheHit: this.cache, completed: this.completed, activity: this.activity, speedFresh: this.speedFresh,
+    speedReason: this.speedReason, speedUpdatedAt: this.speedUpdatedAt, model: this.model, effort: this.effort }; }
 }
 
 export class SessionReader {
   constructor(home) { this.home = home; this.paths = new Map(); this.files = new Map(); this.scanned = 0; }
   async readSelected(route, snapshot) {
-    const metrics = route.threadId ? await this.read(route.threadId) : { tps: null, cacheHit: null };
+    const metrics = route.threadId ? await this.read(route.threadId) : new Usage().snapshot();
     const latest = snapshot();
     return route.threadId === latest.threadId && route.status === latest.status ? metrics : null;
   }
@@ -125,18 +182,27 @@ export class SessionReader {
     return this.paths.get(threadId) ?? null;
   }
   async read(threadId) {
-    const path = await this.locate(threadId);
-    if (!path) return { tps: null, cacheHit: null, completed: false };
-    const handle = await open(path, 'r');
+    let path, handle, relocated;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      path = await this.locate(threadId);
+      if (!path) return new Usage().snapshot();
+      try { handle = await open(path, 'r'); break; }
+      catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        relocated = this.files.get(path); this.files.delete(path); this.paths.delete(threadId);
+        if (attempt === 0) this.scanned = 0;
+      }
+    }
+    if (!handle) return new Usage().snapshot();
     try {
       const stat = await handle.stat();
-      let entry = this.files.get(path);
+      let entry = this.files.get(path) ?? (relocated?.ino === stat.ino && relocated.dev === stat.dev ? relocated : null);
       if (!entry || entry.ino !== stat.ino || stat.size < entry.offset || stat.size - entry.offset > LIMIT || (stat.size === entry.offset && entry.mtime !== stat.mtimeMs)) {
         const offset = Math.max(0, stat.size - LIMIT);
-        entry = { ino: stat.ino, offset, mtime: stat.mtimeMs, pending: Buffer.alloc(0), drop: offset > 0, usage: new Usage() };
-        this.files.set(path, entry);
-        if (this.files.size > 8) this.files.delete(this.files.keys().next().value);
+        entry = { dev: stat.dev, ino: stat.ino, offset, mtime: stat.mtimeMs, pending: Buffer.alloc(0), drop: offset > 0, usage: new Usage() };
       }
+      this.files.set(path, entry);
+      if (this.files.size > 8) this.files.delete(this.files.keys().next().value);
       const bytes = Buffer.alloc(Math.min(LIMIT, stat.size - entry.offset));
       const { bytesRead } = await handle.read(bytes, 0, bytes.length, entry.offset);
       entry.offset += bytesRead;
