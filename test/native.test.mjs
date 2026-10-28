@@ -76,8 +76,8 @@ test('the native text control accepts and confirms successive metric updates', {
       assert.ok(Math.abs(layout.unitX-layout.speedX-layout.speedWidth) < 1, 'unit must follow the measured number without a reserved gap');
       assert.ok(layout.speedX-layout.iconEnd <= 8, 'the number must sit next to the gauge');
       assert.ok(Math.abs(layout.iconCenter-layout.textCenter) <= 0.6, 'icons must align to the text visual centre');
-      const columns = [layout.speedX, layout.speedGroupEnd, layout.cacheGroupX, layout.cacheX, layout.cacheWidth];
-      if (!initial) initial = columns; else assert.deepEqual(columns, initial, 'cache columns must not move as the speed gains digits');
+      const columns = [layout.unitX, layout.speedGroupEnd, layout.cacheGroupX, layout.cacheX, layout.cacheWidth];
+      if (!initial) initial = columns; else assert.deepEqual(columns, initial, 'unit, separator and cache columns must not move as the speed gains digits');
     }
     const pulses = [];
     for (let i = 0; i < 8; i++) {

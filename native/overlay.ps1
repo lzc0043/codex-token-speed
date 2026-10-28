@@ -150,7 +150,8 @@ public class TokenSpeedOverlay : Form {
         if (speed.Length == 0 || cache.Length == 0) { activity = "idle"; speedFresh = false; }
         speedField.Text = speed; cacheField.Text = cache;
         speedField.Width = Math.Min(Px(48), TextRenderer.MeasureText(speed, numberFont, Size.Empty, TextFormatFlags.NoPadding).Width+Px(6));
-        unitField.Left = speedField.Right;
+        speedField.Left = unitField.Left-speedField.Width;
+        gaugeIcon.Left = speedField.Left-Px(18);
         UpdateActivity();
         renderedText = speed.Length == 0 || cache.Length == 0 ? "" : speedField.Text + " t/s   \u00b7   " + prefix + cacheField.Text;
         var widths = new string[10]; int iconCount = 0;

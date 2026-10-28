@@ -169,7 +169,8 @@ func applyReading(_ input: String) -> String {
     if speed.isEmpty || cache.isEmpty { activity = "idle"; speedFresh = false }
     speedField.stringValue = speed; cacheField.stringValue = cache
     speedField.frame.size.width = min(42, ceil((speed as NSString).size(withAttributes: [.font: numberFont]).width) + 4)
-    unitField.frame.origin.x = speedField.frame.maxX
+    speedField.frame.origin.x = unitField.frame.minX - speedField.frame.width
+    gaugeIcon.frame.origin.x = speedField.frame.minX - 18
     updateActivity()
     let phase = ["idle": "闲置", "generating": "模型请求中", "tool": "执行工具", "complete": "已完成"][activity]!
     panel.setAccessibilityLabel("Codex Token 速度计，\(phase)，\(speedFresh ? "最近有效" : "历史")近似输出速度与会话缓存命中率")
