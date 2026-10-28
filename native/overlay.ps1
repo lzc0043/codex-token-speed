@@ -52,7 +52,7 @@ public class TokenSpeedOverlay : Form {
         int y = Px(2) + (numeric ? (int)Math.Round(BaselineOffset(labelFont) - BaselineOffset(numberFont)) : 0);
         view.SetBounds(Px(x), y, Px(width), Px(22)); view.Text = value; Controls.Add(view); return view;
     }
-    PictureBox Icon(string root, string name, int x) {
+    PictureBox AddIcon(string root, string name, int x) {
         Image image;
         using (var source = Image.FromFile(System.IO.Path.Combine(root, name + ".png"))) image = new Bitmap(source);
         var view = new PictureBox(); view.BackColor = Color.Transparent; view.Image = image;
@@ -74,7 +74,7 @@ public class TokenSpeedOverlay : Form {
         speedField = Field("", 28, 48, true); unitField = Field("t/s", 80, 22, false);
         Field("\u00b7", 114, 8, false); Field("\u4f1a\u8bdd\u7f13\u5b58", 154, 54, false);
         cacheField = Field("", 214, 60, true);
-        gaugeIcon = Icon(iconRoot, "gauge", 8); cacheIcon = Icon(iconRoot, "database", 134);
+        gaugeIcon = AddIcon(iconRoot, "gauge", 8); cacheIcon = AddIcon(iconRoot, "database", 134);
         string user = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value;
         string home = Environment.GetEnvironmentVariable("CODEX_HOME") ?? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex");
         string key;
