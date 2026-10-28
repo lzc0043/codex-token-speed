@@ -7,7 +7,7 @@ export function textFor(state) {
   if (!Number.isFinite(state.tps) && !Number.isFinite(state.cacheHit)) return '';
   const speed = Number.isFinite(state.tps) ? state.tps.toFixed(0) : '--';
   const cache = Number.isFinite(state.cacheHit) ? `${state.cacheHit.toFixed(1)}%` : '--';
-  return `${speed} t/s   ·   缓存命中 ${cache}`;
+  return `${speed} t/s   ·   会话缓存 ${cache}`;
 }
 
 export function startDisplay(report, onState = () => {}) {
@@ -25,6 +25,9 @@ export function startDisplay(report, onState = () => {}) {
     else if (line === 'display-visible') onState({ overlayVisible: true });
     else if (line === 'display-hidden') onState({ overlayVisible: false });
     else if (line.startsWith('display-text\t')) onState({ displayedText: line.slice('display-text\t'.length) });
+    else if (line.startsWith('display-layout\t')) {
+      try { onState({ displayLayout: JSON.parse(line.slice('display-layout\t'.length)) }); } catch { report('Invalid native layout report'); }
+    }
   });
   child.stdin.on('error', () => {});
   child.stderr.on('data', bytes => report(bytes.toString().slice(0, 1000)));

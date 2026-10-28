@@ -33,3 +33,8 @@ SOFTWARE.
 Metric definitions were checked against DeepSeek Harness's official source;
 links and the exact referenced revision are in `DEEPSEEK_REFERENCE.md`.
 No extracted application files or DeepSeek implementation code are distributed.
+
+Gauge and Database icons are from Microsoft's Fluent System Icons, revision
+`60d561a815310bd52914fa0bccee14836428e23b`, under the MIT license.
+Original vectors, rendered PNGs, source links and the full Microsoft copyright
+notice are retained in `assets/icons/`.

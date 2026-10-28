@@ -4,7 +4,7 @@ import { SessionReader } from './metrics.mjs';
 import { ActiveSession } from './ipc.mjs';
 import { startDisplay, textFor } from './overlay.mjs';
 
-const version = '0.3.2';
+const version = '0.3.3';
 const home = process.env.CODEX_HOME || join(homedir(), '.codex');
 const headless = process.argv.includes('--headless');
 const reader = new SessionReader(home);

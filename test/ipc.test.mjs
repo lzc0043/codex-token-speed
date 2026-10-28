@@ -35,9 +35,9 @@ test('IPC length-prefix parser handles split/concatenated UTF-8, malformed and o
   assert.throws(() => frames.push(bad, () => {}), /limit/);
 });
 test('UI shows speed and cache without an approximation symbol; missing data stays hidden', () => {
-  assert.equal(textFor({ tps: 42, cacheHit: 0 }), '42 t/s   ·   缓存命中 0.0%');
+  assert.equal(textFor({ tps: 42, cacheHit: 0 }), '42 t/s   ·   会话缓存 0.0%');
   assert.equal(textFor({ tps: null, cacheHit: null }), '');
-  assert.equal(textFor({ tps: null, cacheHit: 80 }), '-- t/s   ·   缓存命中 80.0%');
+  assert.equal(textFor({ tps: null, cacheHit: 80 }), '-- t/s   ·   会话缓存 80.0%');
 });
 test('refreshes missed selection notifications without dropping the current route', { timeout: 12000 }, async () => {
   const home = await mkdtemp(join(tmpdir(), 'token-speed-ipc-'));

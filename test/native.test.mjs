@@ -24,7 +24,7 @@ test('native helpers own a single display, hand over ownership and exit on stdin
       diagnostics.push(() => errors);
       const lines = createInterface({ input: child.stdout });
       owners.push(Promise.race([once(lines, 'line'), once(child, 'exit').then(([code]) => { throw new Error(`Native exited before ownership (${code}): ${errors}`); })]));
-      child.stdin.write('42 t/s   ·   缓存命中 80.0%\n');
+      child.stdin.write('42 t/s   ·   会话缓存 80.0%\n');
       if (i === 0) assert.equal((await owners[0])[0], 'display-owner');
     }
     let secondOwns = false; owners[1].then(() => { secondOwns = true; });
@@ -41,6 +41,10 @@ test('the native text control accepts and confirms successive metric updates', {
   t.signal.addEventListener('abort', () => child.kill());
   const lines = createInterface({ input: child.stdout });
   const iterator = lines[Symbol.asyncIterator]();
+  let layout, initial;
+  lines.on('line', line => {
+    if (line.startsWith('display-layout\t')) layout = JSON.parse(line.slice('display-layout\t'.length));
+  });
   let errors = ''; child.stderr.on('data', bytes => { errors += bytes; });
   async function displayed() {
     while (true) {
@@ -50,9 +54,15 @@ test('the native text control accepts and confirms successive metric updates', {
     }
   }
   try {
-    for (const text of ['42 t/s   ·   缓存命中 80.0%', '57 t/s   ·   缓存命中 90.0%', '']) {
+    for (const text of ['41 t/s   ·   会话缓存 97.0%', '146 t/s   ·   会话缓存 97.0%', '1079 t/s   ·   会话缓存 99.8%', '']) {
       child.stdin.write(text + '\n');
       assert.equal(await displayed(), text);
+      assert.equal(layout.iconCount, 2);
+      assert.ok(Math.max(...layout.digitWidths) - Math.min(...layout.digitWidths) < 0.05, 'digits must be equally wide');
+      assert.ok(Math.abs(layout.speedBaseline - layout.unitBaseline) <= 0.6, 'numbers and units must share a baseline');
+      assert.ok(layout.fontSize >= (process.platform === 'win32' ? 9 : 11));
+      const columns = [layout.speedX, layout.speedWidth, layout.cacheGroupX, layout.cacheX, layout.cacheWidth];
+      if (!initial) initial = columns; else assert.deepEqual(columns, initial, 'cache columns must not move as the speed gains digits');
     }
     const exited = once(child, 'exit'); child.stdin.end(); assert.equal((await exited)[0], 0, errors);
   } finally { child.kill(); lines.close(); await rm(home, { recursive: true, force: true }); }

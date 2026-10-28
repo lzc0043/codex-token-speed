@@ -37,7 +37,7 @@ exit(0)
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
-let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 330, height: 25),
+let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 260, height: 25),
                     styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
 panel.isOpaque = false
 panel.backgroundColor = .clear
@@ -46,14 +46,96 @@ panel.ignoresMouseEvents = true
 panel.hidesOnDeactivate = false
 panel.level = .floating
 panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-let label = NSTextField(labelWithString: "")
-label.frame = NSRect(x: 8, y: 4, width: 314, height: 18)
-label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-label.drawsBackground = false
-label.alignment = .center
-label.textColor = .secondaryLabelColor
-panel.contentView?.addSubview(label)
+let numberFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+let mutedColor = NSColor(calibratedWhite: 0.55, alpha: 1)
+let numberColor = NSColor(calibratedWhite: 0.4, alpha: 1)
+func field(_ text: String, x: CGFloat, width: CGFloat, numeric: Bool = false) -> NSTextField {
+    let view = NSTextField(labelWithString: text)
+    view.frame = NSRect(x: x, y: 4, width: width, height: 18)
+    view.font = numeric ? numberFont : .systemFont(ofSize: 11)
+    view.alignment = numeric ? .right : .left
+    view.textColor = numeric ? numberColor : mutedColor
+    view.drawsBackground = false
+    panel.contentView?.addSubview(view)
+    return view
+}
+let speedField = field("", x: 28, width: 42, numeric: true)
+let unitField = field("t/s", x: 74, width: 20)
+let separator = field("·", x: 104, width: 8)
+let cacheName = field("会话缓存", x: 144, width: 48)
+let cacheField = field("", x: 198, width: 54, numeric: true)
+let root = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().deletingLastPathComponent()
+func icon(_ name: String, x: CGFloat) -> NSImageView {
+    guard let image = NSImage(contentsOf: root.appendingPathComponent("assets/icons/\(name).png")) else {
+        fputs("Missing meter icon: \(name)\n", stderr); exit(1)
+    }
+    image.isTemplate = true
+    let view = NSImageView(frame: NSRect(x: x, y: 6, width: 14, height: 14))
+    view.image = image; view.contentTintColor = mutedColor
+    view.imageScaling = .scaleProportionallyUpOrDown
+    view.setAccessibilityElement(false)
+    panel.contentView?.addSubview(view)
+    return view
+}
+let gaugeIcon = icon("gauge", x: 8)
+let cacheIcon = icon("database", x: 124)
+let baseline = unitField.frame.maxY - unitField.firstBaselineOffsetFromTop
+for view in [speedField, cacheField] {
+    view.frame.origin.y += baseline - (view.frame.maxY - view.firstBaselineOffsetFromTop)
+}
 panel.setAccessibilityLabel("Codex Token 速度计，近似输出速度与会话缓存命中率")
+
+let previewIndex = CommandLine.arguments.firstIndex(of: "--preview")
+let previewPath = previewIndex.flatMap { $0 + 1 < CommandLine.arguments.count ? CommandLine.arguments[$0 + 1] : nil }
+if CommandLine.arguments.contains("--dark-preview") { panel.appearance = NSAppearance(named: .darkAqua) }
+var lastAppearance: NSAppearance.Name?
+func updateColors() {
+    let appearance = panel.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
+    guard appearance != lastAppearance else { return }
+    lastAppearance = appearance
+    let color = NSColor(calibratedWhite: appearance == .darkAqua ? 0.8 : 0.4, alpha: 1)
+    speedField.textColor = color; cacheField.textColor = color
+}
+func savePreview() {
+    guard let path = previewPath, let view = panel.contentView,
+          let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+    view.cacheDisplay(in: view.bounds, to: bitmap)
+    let image = NSImage(size: view.bounds.size)
+    image.lockFocus()
+    let dark = CommandLine.arguments.contains("--dark-preview")
+    NSColor(calibratedWhite: dark ? 0.12 : 1, alpha: 1).setFill(); view.bounds.fill()
+    NSImage(cgImage: bitmap.cgImage!, size: view.bounds.size).draw(in: view.bounds)
+    image.unlockFocus()
+    guard let data = image.tiffRepresentation,
+          let png = NSBitmapImageRep(data: data)?.representation(using: .png, properties: [:]) else { return }
+    do { try png.write(to: URL(fileURLWithPath: path)) }
+    catch { fputs("Cannot save meter preview\n", stderr) }
+}
+
+func applyReading(_ text: String) -> String {
+    let parts = text.components(separatedBy: "   ·   ")
+    var speed = "", cache = ""
+    if parts.count == 2 && parts[0].hasSuffix(" t/s") && parts[1].hasPrefix("会话缓存 ") {
+        speed = String(parts[0].dropLast(4)); cache = String(parts[1].dropFirst(5))
+        let validSpeed = speed == "--" || (Double(speed).map { $0.isFinite && $0 >= 0 } ?? false)
+        let percent = cache.hasSuffix("%") ? Double(String(cache.dropLast())) : nil
+        let validCache = cache == "--" || (percent.map { $0.isFinite && (0...100).contains($0) } ?? false)
+        if !validSpeed || !validCache { speed = ""; cache = "" }
+    }
+    speedField.stringValue = speed; cacheField.stringValue = cache
+    let result = speed.isEmpty || cache.isEmpty ? "" : "\(speedField.stringValue) t/s   ·   会话缓存 \(cacheField.stringValue)"
+    if !result.isEmpty { savePreview() }
+    let widths = (0...9).map { (String($0) as NSString).size(withAttributes: [.font: numberFont]).width }
+    let layout: [String: Any] = ["speedX": speedField.frame.minX, "speedWidth": speedField.frame.width,
+        "cacheGroupX": cacheIcon.frame.minX, "cacheX": cacheField.frame.minX, "cacheWidth": cacheField.frame.width,
+        "digitWidths": widths, "iconCount": panel.contentView!.subviews.filter { $0 is NSImageView }.count, "fontSize": numberFont.pointSize,
+        "speedBaseline": speedField.frame.maxY - speedField.firstBaselineOffsetFromTop,
+        "unitBaseline": unitField.frame.maxY - unitField.firstBaselineOffsetFromTop, "bottomInset": 27]
+    if let json = try? JSONSerialization.data(withJSONObject: layout), let value = String(data: json, encoding: .utf8) {
+        print("display-layout\t" + value)
+    }
+    return result
+}
 
 let home = ProcessInfo.processInfo.environment["CODEX_HOME"] ?? NSHomeDirectory() + "/.codex"
 let directory = home + "/token-speed"
@@ -65,7 +147,9 @@ var ownsDisplay = false
 let inputLock = NSLock()
 var receivedText = ""
 var inputEnded = false
-let headless = CommandLine.arguments.contains("--headless")
+let headless = CommandLine.arguments.contains("--headless") || previewPath != nil
+var lastInput: String?
+var renderedText = ""
 var reportedVisible: Bool?
 func reportVisibility(_ visible: Bool) {
     guard ownsDisplay, reportedVisible != visible else { return }
@@ -90,12 +174,13 @@ let timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
         ownsDisplay = flock(fd, LOCK_EX | LOCK_NB) == 0
         if ownsDisplay { print("display-owner"); fflush(stdout) }
     }
-    if ownsDisplay && label.stringValue != text {
-        label.stringValue = text
-        print("display-text\t" + label.stringValue); fflush(stdout)
+    updateColors()
+    if ownsDisplay && lastInput != text {
+        lastInput = text; renderedText = applyReading(text)
+        print("display-text\t" + renderedText); fflush(stdout)
     }
     let codexPIDs = Set(NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex").map { $0.processIdentifier })
-    guard ownsDisplay, !headless, !label.stringValue.isEmpty,
+    guard ownsDisplay, !headless, !renderedText.isEmpty,
           let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
           let index = windows.firstIndex(where: {
               codexPIDs.contains($0[kCGWindowOwnerPID as String] as? Int32 ?? -1) &&
@@ -105,7 +190,7 @@ let timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
           let bounds = windowRect(windows[index]),
           let screen = NSScreen.screens.first
     else { panel.orderOut(nil); reportVisibility(false); return }
-    let strip = CGRect(x: bounds.midX - 165, y: bounds.maxY - 40, width: 330, height: 25)
+    let strip = CGRect(x: bounds.midX - 130, y: bounds.maxY - 52, width: 260, height: 25)
     guard !statusIsCovered(windows, before: index, frame: strip, ownPID: getpid()) else {
         panel.orderOut(nil); reportVisibility(false); return
     }
