@@ -43,7 +43,7 @@ public class TokenSpeedOverlay : Form {
         timer.Interval = 200; timer.Tick += Tick; timer.Start();
     }
     void Tick(object sender, EventArgs e) {
-        if (ended) { Close(); return; }
+        if (ended) { timer.Stop(); Close(); Application.ExitThread(); return; }
         if (!ownsDisplay) {
             try { ownsDisplay = mutex.WaitOne(0); } catch (AbandonedMutexException) { ownsDisplay = true; }
             if (ownsDisplay) { Console.WriteLine("display-owner"); Console.Out.Flush(); }
