@@ -1,0 +1,24 @@
+import { spawn } from 'node:child_process';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+export function textFor(state) {
+  const speed = Number.isFinite(state.tps) ? state.tps.toFixed(0) : '--';
+  const cache = Number.isFinite(state.cacheHit) ? `${state.cacheHit.toFixed(1)}%` : '--';
+  return `≈ ${speed} t/s   ·   缓存命中 ${cache}`;
+}
+
+export function startDisplay(report) {
+  const root = fileURLToPath(new URL('../', import.meta.url));
+  let command, args;
+  if (process.platform === 'darwin') { command = join(root, 'bin/token-speed-macos'); args = []; }
+  else if (process.platform === 'win32') {
+    command = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
+    args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', join(root, 'native/overlay.ps1')];
+  } else throw new Error('Only macOS and Windows are supported');
+  const child = spawn(command, args, { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true });
+  child.stdin.on('error', () => {});
+  child.stderr.on('data', bytes => report(bytes.toString().slice(0, 1000)));
+  child.on('error', error => report(error.message));
+  return child;
+}
