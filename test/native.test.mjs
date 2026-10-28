@@ -57,6 +57,7 @@ test('the native text control accepts and confirms successive metric updates', {
   try {
     for (const state of [
       { tps: 33, cacheHit: 98.4, activity: 'generating', speedFresh: false },
+      { tps: 33, cacheHit: 98.4, activity: 'generating', speedFresh: true },
       { tps: 33, cacheHit: 98.4, activity: 'tool', speedFresh: false },
       ...[33, 146, 1079].map(tps => ({ tps, cacheHit: 98.4, activity: 'complete', speedFresh: true })),
       { activity: 'generating' }, { activity: 'idle' },
