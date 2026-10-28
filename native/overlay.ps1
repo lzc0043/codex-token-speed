@@ -21,6 +21,7 @@ public class TokenSpeedOverlay : Form {
     volatile string text = "\u2248 -- t/s   \u00b7   \u7f13\u5b58\u547d\u4e2d --";
     volatile bool ended;
     bool ownsDisplay;
+    bool disposed;
     protected override bool ShowWithoutActivation { get { return true; } }
     protected override CreateParams CreateParams {
         get { var p = base.CreateParams; p.ExStyle |= 0x08000000 | 0x00000080 | 0x00000020; return p; }
@@ -53,14 +54,16 @@ public class TokenSpeedOverlay : Form {
         try {
             string name = Process.GetProcessById((int)id).ProcessName;
             codex = name.Equals("Codex", StringComparison.OrdinalIgnoreCase) || name.Equals("ChatGPT", StringComparison.OrdinalIgnoreCase);
-        } catch (ArgumentException) { }
+        } catch (Exception) { codex = false; }
         Rect r;
         if (!ownsDisplay || !codex || IsIconic(h) || !GetWindowRect(h, out r) || r.Right-r.Left < 500) { Hide(); return; }
         label.Text = text; Location = new Point(r.Left + (r.Right-r.Left-Width)/2, r.Bottom-Height-5);
         if (!Visible) Show();
     }
     protected override void Dispose(bool disposing) {
-        if (disposing) { timer.Dispose(); if (ownsDisplay) mutex.ReleaseMutex(); mutex.Dispose(); }
+        if (disposing && !disposed) {
+            disposed = true; timer.Dispose(); if (ownsDisplay) mutex.ReleaseMutex(); mutex.Dispose();
+        }
         base.Dispose(disposing);
     }
     public static void Run() {
