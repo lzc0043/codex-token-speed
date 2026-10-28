@@ -61,7 +61,8 @@ export class Frames {
 }
 
 export class ActiveSession {
-  constructor(home) {
+  constructor(home, onChange = () => {}) {
+    this.onChange = onChange;
     this.router = new Router(); this.state = 'disconnected'; this.stopped = false; this.index = 0;
     this.candidates = process.platform === 'win32' ? [process.env.CODEX_IPC_SOCKET || '\\\\.\\pipe\\codex-ipc'] : [...new Set([
       process.env.CODEX_IPC_SOCKET, join(home, 'ipc/ipc.sock'),
@@ -69,7 +70,11 @@ export class ActiveSession {
       `/tmp/codex-ipc/ipc-${process.getuid()}.sock`, '/tmp/codex-ipc/ipc.sock',
     ].filter(Boolean))];
     this.open();
-    this.refreshTimer = setInterval(() => this.refresh(), 5000);
+    this.refreshTimer = setInterval(() => this.refresh(), 500);
+  }
+  notify() {
+    const route = this.snapshot(), key = `${route.status}:${route.threadId ?? ''}`;
+    if (key !== this.reportedRoute) { this.reportedRoute = key; this.onChange(); }
   }
   async open() {
     if (this.stopped) return;
@@ -85,9 +90,9 @@ export class ActiveSession {
         socket.write(frameJSON({ type: 'request', requestId: randomUUID(), sourceClientId: 'initializing-client', version: 0,
           method: 'initialize', params: { clientType: 'codex-token-speed' } }));
       });
-      socket.on('data', bytes => { try { parser.push(bytes, frame => this.router.ingest(frame)); } catch { socket.destroy(); } });
+      socket.on('data', bytes => { try { parser.push(bytes, frame => this.router.ingest(frame)); this.notify(); } catch { socket.destroy(); } });
       socket.on('error', () => {});
-      socket.on('close', () => { this.router = new Router(); this.state = 'disconnected'; this.retry(); });
+      socket.on('close', () => { this.router = new Router(); this.state = 'disconnected'; if (!this.stopped) this.notify(); this.retry(); });
     } catch { this.retry(); }
   }
   async refresh() {
@@ -108,12 +113,13 @@ export class ActiveSession {
             if (frame.type === 'response' && frame.method === 'initialize' && typeof frame.result?.clientId === 'string') initialized = true;
             latest.ingest(frame);
           });
-          if (!initialized || settle) return;
+          if (!initialized) return;
+          clearTimeout(settle);
           settle = setTimeout(() => {
             // A live selection event is newer than a snapshot being fetched.
-            if (!this.stopped && this.state === 'connected' && this.socket === main && this.router === original && original.revision === revision) this.router = latest;
+            if (!this.stopped && this.state === 'connected' && this.socket === main && this.router === original && original.revision === revision) { this.router = latest; this.notify(); }
             socket.destroy();
-          }, 150);
+          }, 50);
         } catch { socket.destroy(); }
       });
       socket.on('error', () => {});

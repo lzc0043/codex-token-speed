@@ -7,9 +7,29 @@ func windowRect(_ window: [String: Any]) -> CGRect? {
     return CGRect(x: x, y: y, width: w, height: h)
 }
 
+func targetWindowIndex(_ windows: [[String: Any]], pids: Set<Int32>) -> Int? {
+    windows.firstIndex(where: {
+        pids.contains($0[kCGWindowOwnerPID as String] as? Int32 ?? -1) &&
+        ($0[kCGWindowLayer as String] as? Int) == 0 &&
+        ($0[kCGWindowAlpha as String] as? Double ?? 1) > 0 &&
+        (windowRect($0)?.width ?? 0) >= 500 && (windowRect($0)?.height ?? 0) >= 200
+    })
+}
+
+func meterFrame(_ bounds: CGRect) -> CGRect? {
+    // shortcut: reserve control space geometrically until Codex exposes a composer slot.
+    let contentWidth = min(800, bounds.width - 48)
+    let left = bounds.midX - contentWidth / 2 + 150
+    let right = bounds.midX + contentWidth / 2 - 320
+    guard right - left >= 228 else { return nil }
+    return CGRect(x: (left + right - 228) / 2, y: bounds.maxY - 52, width: 228, height: 25)
+}
+
 func statusIsCovered(_ windows: [[String: Any]], before index: Int, frame: CGRect, ownPID: Int32) -> Bool {
-    windows.prefix(index).contains { window in
+    let targetPID = windows[index][kCGWindowOwnerPID as String] as? Int32
+    return windows.prefix(index).contains { window in
         guard (window[kCGWindowOwnerPID as String] as? Int32) != ownPID,
+              (window[kCGWindowOwnerPID as String] as? Int32) != targetPID,
               (window[kCGWindowAlpha as String] as? Double ?? 1) > 0,
               (0...Int(NSWindow.Level.floating.rawValue)).contains(window[kCGWindowLayer as String] as? Int ?? 0),
               let bounds = windowRect(window) else { return false }
@@ -19,7 +39,7 @@ func statusIsCovered(_ windows: [[String: Any]], before index: Int, frame: CGRec
 
 #if VISIBILITY_TEST
 func fixture(_ pid: Int32, _ rect: CGRect, alpha: Double = 1) -> [String: Any] {
-    [kCGWindowOwnerPID as String: pid, kCGWindowAlpha as String: alpha,
+    [kCGWindowOwnerPID as String: pid, kCGWindowAlpha as String: alpha, kCGWindowLayer as String: 0,
      kCGWindowBounds as String: ["X": rect.minX, "Y": rect.minY, "Width": rect.width, "Height": rect.height]]
 }
 let strip = CGRect(x: 400, y: 700, width: 330, height: 25)
@@ -31,13 +51,24 @@ assert(!statusIsCovered([fixture(2, strip, alpha: 0), codex], before: 1, frame: 
 assert(!statusIsCovered([codex, fixture(2, strip)], before: 0, frame: strip, ownPID: 3))
 var capture = fixture(2, strip); capture[kCGWindowLayer as String] = 1000
 assert(!statusIsCovered([capture, codex], before: 1, frame: strip, ownPID: 3))
+let fullscreen = [fixture(1, CGRect(x: 0, y: 33, width: 1512, height: 32), alpha: 0),
+                  fixture(1, CGRect(x: 0, y: 33, width: 1512, height: 949))]
+assert(targetWindowIndex(fullscreen, pids: [1]) == 1, "Full screen must follow the content window, not its 32pt auxiliary window")
+assert(meterFrame(CGRect(x: 0, y: 0, width: 650, height: 800)) == nil, "A narrow operation row must hide metrics instead of overlapping controls")
+for width in [746.0, 800, 1100, 1512, 2400] {
+    let b = CGRect(x: -300, y: -100, width: width, height: 900)
+    let f = meterFrame(b)!, contentWidth = min(800, b.width - 48)
+    assert(f.minX >= b.midX - contentWidth / 2 + 150 && f.maxX <= b.midX + contentWidth / 2 - 320)
+    assert(f.maxY == b.maxY - 27)
+}
+assert(!statusIsCovered([fixture(1, strip), codex], before: 1, frame: strip, ownPID: 3))
 print("Window visibility checks passed")
 exit(0)
 #else
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
-let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 260, height: 25),
+let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 228, height: 25),
                     styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
 panel.isOpaque = false
 panel.backgroundColor = .clear
@@ -45,7 +76,7 @@ panel.hasShadow = false
 panel.ignoresMouseEvents = true
 panel.hidesOnDeactivate = false
 panel.level = .floating
-panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .canJoinAllApplications]
 let numberFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
 let mutedColor = NSColor(calibratedWhite: 0.55, alpha: 1)
 let numberColor = NSColor(calibratedWhite: 0.4, alpha: 1)
@@ -59,11 +90,11 @@ func field(_ text: String, x: CGFloat, width: CGFloat, numeric: Bool = false) ->
     panel.contentView?.addSubview(view)
     return view
 }
-let speedField = field("", x: 28, width: 42, numeric: true)
-let unitField = field("t/s", x: 74, width: 20)
-let separator = field("·", x: 104, width: 8)
-let cacheName = field("会话缓存", x: 144, width: 48)
-let cacheField = field("", x: 198, width: 54, numeric: true)
+let speedField = field("", x: 22, width: 42, numeric: true)
+let unitField = field("t/s", x: 66, width: 18)
+let separator = field("·", x: 88, width: 8)
+let cacheName = field("会话缓存", x: 118, width: 48)
+let cacheField = field("", x: 170, width: 50, numeric: true)
 let root = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().deletingLastPathComponent()
 func icon(_ name: String, x: CGFloat) -> NSImageView {
     guard let image = NSImage(contentsOf: root.appendingPathComponent("assets/icons/\(name).png")) else {
@@ -77,8 +108,8 @@ func icon(_ name: String, x: CGFloat) -> NSImageView {
     panel.contentView?.addSubview(view)
     return view
 }
-let gaugeIcon = icon("gauge", x: 8)
-let cacheIcon = icon("database", x: 124)
+let gaugeIcon = icon("gauge", x: 4)
+let cacheIcon = icon("database", x: 100)
 let baseline = unitField.frame.maxY - unitField.firstBaselineOffsetFromTop
 for view in [speedField, cacheField] {
     view.frame.origin.y += baseline - (view.frame.maxY - view.firstBaselineOffsetFromTop)
@@ -130,7 +161,8 @@ func applyReading(_ text: String) -> String {
         "cacheGroupX": cacheIcon.frame.minX, "cacheX": cacheField.frame.minX, "cacheWidth": cacheField.frame.width,
         "digitWidths": widths, "iconCount": panel.contentView!.subviews.filter { $0 is NSImageView }.count, "fontSize": numberFont.pointSize,
         "speedBaseline": speedField.frame.maxY - speedField.firstBaselineOffsetFromTop,
-        "unitBaseline": unitField.frame.maxY - unitField.firstBaselineOffsetFromTop, "bottomInset": 27]
+        "unitBaseline": unitField.frame.maxY - unitField.firstBaselineOffsetFromTop, "bottomInset": 27,
+        "fullScreenSupport": panel.collectionBehavior.contains(.canJoinAllApplications)]
     if let json = try? JSONSerialization.data(withJSONObject: layout), let value = String(data: json, encoding: .utf8) {
         print("display-layout\t" + value)
     }
@@ -182,15 +214,11 @@ let timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
     let codexPIDs = Set(NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex").map { $0.processIdentifier })
     guard ownsDisplay, !headless, !renderedText.isEmpty,
           let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
-          let index = windows.firstIndex(where: {
-              codexPIDs.contains($0[kCGWindowOwnerPID as String] as? Int32 ?? -1) &&
-              ($0[kCGWindowLayer as String] as? Int) == 0 &&
-              (windowRect($0)?.width ?? 0) >= 500
-          }),
+          let index = targetWindowIndex(windows, pids: codexPIDs),
           let bounds = windowRect(windows[index]),
           let screen = NSScreen.screens.first
     else { panel.orderOut(nil); reportVisibility(false); return }
-    let strip = CGRect(x: bounds.midX - 130, y: bounds.maxY - 52, width: 260, height: 25)
+    guard let strip = meterFrame(bounds) else { panel.orderOut(nil); reportVisibility(false); return }
     guard !statusIsCovered(windows, before: index, frame: strip, ownPID: getpid()) else {
         panel.orderOut(nil); reportVisibility(false); return
     }

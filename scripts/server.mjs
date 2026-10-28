@@ -4,11 +4,11 @@ import { SessionReader } from './metrics.mjs';
 import { ActiveSession } from './ipc.mjs';
 import { startDisplay, textFor } from './overlay.mjs';
 
-const version = '0.3.3';
+const version = '0.3.4';
 const home = process.env.CODEX_HOME || join(homedir(), '.codex');
 const headless = process.argv.includes('--headless');
 const reader = new SessionReader(home);
-let active, display, timer, busy = false, stopping = false, initialized = false;
+let active, display, timer, currentThread, busy = false, pendingTick = false, stopping = false, initialized = false;
 let state = { version, tps: null, cacheHit: null, status: 'starting', overlay: 'starting' };
 const report = message => { state.overlayError = message.trim(); process.stderr.write(`token-speed: ${message.trim()}\n`); };
 
@@ -16,16 +16,27 @@ async function start() {
   if (initialized || stopping) return;
   initialized = true;
   if (headless) { state.status = 'headless'; state.overlay = 'headless'; return; }
-  active = new ActiveSession(home);
+  active = new ActiveSession(home, () => tick());
   await tick();
   timer = setInterval(tick, 750);
 }
 async function tick() {
-  if (headless || busy || stopping) return;
+  if (headless || stopping) return;
+  if (busy) { pendingTick = true; return; }
   busy = true;
   try {
     const route = active.snapshot();
-    const metrics = route.threadId ? await reader.read(route.threadId) : { tps: null, cacheHit: null };
+    if (route.threadId !== currentThread) {
+      currentThread = route.threadId;
+      Object.assign(state, { tps: null, cacheHit: null, status: route.status });
+      if (display?.stdin.writable) display.stdin.write('\n');
+    }
+    const metrics = await reader.readSelected(route, () => active.snapshot());
+    if (!metrics) {
+      const latest = active.snapshot();
+      Object.assign(state, { tps: null, cacheHit: null, status: latest.status });
+      pendingTick = true; return;
+    }
     state = { ...state, ...metrics, status: route.status };
     if (!display) {
       Object.assign(state, { overlay: 'standby', overlayOwner: false, overlayVisible: false });
@@ -36,6 +47,7 @@ async function tick() {
   finally {
     if (display?.stdin.writable && display.stdin.writableLength < 4096) display.stdin.write(textFor(state) + '\n');
     busy = false;
+    if (pendingTick) { pendingTick = false; queueMicrotask(tick); }
   }
 }
 function stop() {

@@ -44,6 +44,7 @@ test('refreshes missed selection notifications without dropping the current rout
   const path = process.platform === 'win32' ? `\\\\.\\pipe\\token-speed-test-${process.pid}` : join(home, 'ipc.sock');
   const previous = process.env.CODEX_IPC_SOCKET;
   const connections = new Set(); let selected = id, monitor, mainSocket, onProbe;
+  const changes = [];
   const server = createServer(socket => {
     connections.add(socket); socket.on('close', () => connections.delete(socket));
     const parser = new Frames();
@@ -56,16 +57,17 @@ test('refreshes missed selection notifications without dropping the current rout
     }));
   });
   const waitFor = async predicate => {
-    const until = Date.now() + 7000;
+    const until = Date.now() + 1500;
     while (!predicate() && Date.now() < until) await new Promise(r => setTimeout(r, 20));
     assert.equal(predicate(), true, 'the current thread must recover after a missed notification');
   };
   try {
     await new Promise(resolve => server.listen(path, resolve));
-    process.env.CODEX_IPC_SOCKET = path; monitor = new ActiveSession(home);
+    process.env.CODEX_IPC_SOCKET = path; monitor = new ActiveSession(home, () => changes.push(monitor.snapshot().threadId));
     await waitFor(() => monitor.snapshot().threadId === id);
     selected = id.slice(0, -1) + '2';
     await waitFor(() => monitor.snapshot().threadId === selected);
+    assert.equal(changes.at(-1), selected, 'a recovered selection must notify the display immediately');
     assert.equal(monitor.snapshot().status, 'connected');
     await waitFor(() => !monitor.refreshSocket);
     const newer = id.slice(0, -1) + '3';
@@ -74,6 +76,7 @@ test('refreshes missed selection notifications without dropping the current rout
     await waitFor(() => monitor.snapshot().threadId === newer);
     await new Promise(resolve => setTimeout(resolve, 250));
     assert.equal(monitor.snapshot().threadId, newer, 'a stale refresh must not overwrite a live switch');
+    assert.equal(changes.at(-1), newer);
   } finally {
     monitor?.close(); for (const socket of connections) socket.destroy();
     await new Promise(resolve => server.close(resolve));

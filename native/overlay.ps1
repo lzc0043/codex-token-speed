@@ -41,6 +41,13 @@ public class TokenSpeedOverlay : Form {
         get { var p = base.CreateParams; p.ExStyle |= 0x08000000 | 0x00000080 | 0x00000020; return p; }
     }
     int Px(int value) { return (int)Math.Round(value * scale); }
+    Point? MeterLocation(Rect r) {
+        // shortcut: reserve control space geometrically until Codex exposes a composer slot.
+        int contentWidth = Math.Min(Px(800), r.Right-r.Left-Px(48));
+        int left = r.Left + (r.Right-r.Left-contentWidth)/2 + Px(150);
+        int right = r.Left + (r.Right-r.Left+contentWidth)/2 - Px(320);
+        return right-left < Width ? (Point?)null : new Point((left+right-Width)/2, r.Bottom-Height-Px(27));
+    }
     float BaselineOffset(Font font) {
         return (Px(22) - font.GetHeight(DeviceDpi)) / 2f + font.SizeInPoints * DeviceDpi / 72f * font.FontFamily.GetCellAscent(font.Style) / font.FontFamily.GetEmHeight(font.Style);
     }
@@ -68,13 +75,22 @@ public class TokenSpeedOverlay : Form {
         bool dark = Convert.ToInt32(Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1)) == 0;
         numberColor = dark ? Color.FromArgb(204, 204, 204) : Color.FromArgb(102, 102, 102);
         FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true;
-        BackColor = Color.Magenta; TransparencyKey = BackColor; AllowTransparency = true; ClientSize = new Size(Px(282), Px(26));
+        BackColor = Color.Magenta; TransparencyKey = BackColor; AllowTransparency = true; ClientSize = new Size(Px(248), Px(26));
         AccessibleName = "Codex Token Speed: approximate t/s and cache hit rate";
         FormClosed += (sender, e) => Application.ExitThread();
-        speedField = Field("", 28, 48, true); unitField = Field("t/s", 80, 22, false);
-        Field("\u00b7", 114, 8, false); Field("\u4f1a\u8bdd\u7f13\u5b58", 154, 54, false);
-        cacheField = Field("", 214, 60, true);
-        gaugeIcon = AddIcon(iconRoot, "gauge", 8); cacheIcon = AddIcon(iconRoot, "database", 134);
+        speedField = Field("", 22, 48, true); unitField = Field("t/s", 72, 22, false);
+        Field("\u00b7", 98, 8, false); Field("\u4f1a\u8bdd\u7f13\u5b58", 128, 54, false);
+        cacheField = Field("", 186, 54, true);
+        gaugeIcon = AddIcon(iconRoot, "gauge", 4); cacheIcon = AddIcon(iconRoot, "database", 110);
+        if (headless) {
+            if (MeterLocation(new Rect { Left = 0, Top = 0, Right = Px(650), Bottom = Px(900) }) != null) throw new InvalidOperationException("Narrow metrics must be hidden");
+            foreach (int width in new[] { 800, 1100, 1512, 2400 }) {
+                var r = new Rect { Left = -Px(300), Top = 0, Right = Px(width-300), Bottom = Px(900) };
+                Point? point = MeterLocation(r);
+                int content = Math.Min(Px(800), Px(width-48));
+                if (point == null || point.Value.X < r.Left+(Px(width)-content)/2+Px(150) || point.Value.X+Width > r.Left+(Px(width)+content)/2-Px(320) || point.Value.Y+Height != r.Bottom-Px(27)) throw new InvalidOperationException("Metrics overlap reserved controls");
+            }
+        }
         string user = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value;
         string home = Environment.GetEnvironmentVariable("CODEX_HOME") ?? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex");
         string key;
@@ -130,7 +146,9 @@ public class TokenSpeedOverlay : Form {
         } catch (Exception) { codex = false; }
         Rect r;
         if (!ownsDisplay || headless || renderedText.Length == 0 || !codex || IsIconic(h) || !GetWindowRect(h, out r) || r.Right-r.Left < Px(500)) { Hide(); ReportVisibility(false); return; }
-        Location = new Point(r.Left + (r.Right-r.Left-Width)/2, r.Bottom-Height-Px(27));
+        Point? location = MeterLocation(r);
+        if (location == null) { Hide(); ReportVisibility(false); return; }
+        Location = location.Value;
         if (!Visible) Show();
         ReportVisibility(Visible);
     }

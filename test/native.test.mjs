@@ -58,6 +58,7 @@ test('the native text control accepts and confirms successive metric updates', {
       child.stdin.write(text + '\n');
       assert.equal(await displayed(), text);
       assert.equal(layout.iconCount, 2);
+      if (process.platform === 'darwin') assert.equal(layout.fullScreenSupport, true);
       assert.ok(Math.max(...layout.digitWidths) - Math.min(...layout.digitWidths) < 0.05, 'digits must be equally wide');
       assert.ok(Math.abs(layout.speedBaseline - layout.unitBaseline) <= 0.6, 'numbers and units must share a baseline');
       assert.ok(layout.fontSize >= (process.platform === 'win32' ? 9 : 11));

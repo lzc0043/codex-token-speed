@@ -6,6 +6,21 @@ import { join } from 'node:path';
 import { Usage, SessionReader } from '../scripts/metrics.mjs';
 
 const id = '00000000-0000-4000-8000-000000000001';
+test('a chat switched during an asynchronous read cannot receive the old chat metrics', async () => {
+  let resolveRead;
+  const reader = new SessionReader('unused');
+  reader.read = () => new Promise(resolve => { resolveRead = resolve; });
+  const original = { threadId: id, status: 'connected' };
+  let current = original;
+  const stale = reader.readSelected(original, () => current);
+  current = { threadId: id.slice(0, -1) + '2', status: 'connected' };
+  resolveRead({ tps: 42, cacheHit: 98 });
+  assert.equal(await stale, null);
+  const fresh = reader.readSelected(current, () => current);
+  resolveRead({ tps: 73, cacheHit: 60 });
+  assert.deepEqual(await fresh, { tps: 73, cacheHit: 60 });
+  assert.deepEqual(await reader.readSelected({ threadId: null, status: 'waiting-session' }, () => ({ threadId: null, status: 'waiting-session' })), { tps: null, cacheHit: null });
+});
 const begin = (turn = 'one') => ({ type: 'event_msg', timestamp: '2026-10-28T02:00:00.000Z', payload: { type: 'task_started', turn_id: turn, started_at: 1793152800 } });
 const usage = (n = 1, turn = 'one') => ({ type: 'token_usage_record', payload: {
   turn_id: turn, usage: { input_tokens: 100, cached_input_tokens: 80, output_tokens: 20, reasoning_output_tokens: 10 },

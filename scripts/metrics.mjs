@@ -81,6 +81,11 @@ export class Usage {
 
 export class SessionReader {
   constructor(home) { this.home = home; this.paths = new Map(); this.files = new Map(); this.scanned = 0; }
+  async readSelected(route, snapshot) {
+    const metrics = route.threadId ? await this.read(route.threadId) : { tps: null, cacheHit: null };
+    const latest = snapshot();
+    return route.threadId === latest.threadId && route.status === latest.status ? metrics : null;
+  }
   async locate(threadId) {
     if (!threadPattern.test(threadId)) return null;
     if (this.paths.has(threadId)) return this.paths.get(threadId);
