@@ -33,7 +33,7 @@ codex plugin add codex-token-speed@codex-token-speed-local
 
 ## 使用和统计口径
 
-状态条使用透明背景和较小的灰色文字，贴合 Codex 窗口底部，随窗口移动；切换其他应用时隐藏，不抢焦点，点击穿透。它是原生附着窗口。Codex 没有公开的输入栏扩展接口，因此位置无法完全复刻 DeepSeek Harness 的输入栏组件。
+状态条使用透明背景和较小的灰色文字，贴合 Codex 窗口底部，随窗口移动；不抢焦点，点击穿透。macOS 在 Codex 可见、状态条区域未被其他窗口覆盖时显示，失去焦点不会直接隐藏；Windows 切换其他应用时隐藏。它是原生附着窗口。Codex 没有公开的输入栏扩展接口，因此位置无法完全复刻 DeepSeek Harness 的输入栏组件。
 
 | 显示 | 含义 |
 | --- | --- |

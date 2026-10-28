@@ -1,6 +1,40 @@
 import AppKit
 import Darwin
 
+func windowRect(_ window: [String: Any]) -> CGRect? {
+    guard let b = window[kCGWindowBounds as String] as? [String: CGFloat],
+          let x = b["X"], let y = b["Y"], let w = b["Width"], let h = b["Height"] else { return nil }
+    return CGRect(x: x, y: y, width: w, height: h)
+}
+
+func statusIsCovered(_ windows: [[String: Any]], before index: Int, frame: CGRect, ownPID: Int32) -> Bool {
+    windows.prefix(index).contains { window in
+        guard (window[kCGWindowOwnerPID as String] as? Int32) != ownPID,
+              (window[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+              (0...Int(NSWindow.Level.floating.rawValue)).contains(window[kCGWindowLayer as String] as? Int ?? 0),
+              let bounds = windowRect(window) else { return false }
+        return bounds.intersects(frame)
+    }
+}
+
+#if VISIBILITY_TEST
+func fixture(_ pid: Int32, _ rect: CGRect, alpha: Double = 1) -> [String: Any] {
+    [kCGWindowOwnerPID as String: pid, kCGWindowAlpha as String: alpha,
+     kCGWindowBounds as String: ["X": rect.minX, "Y": rect.minY, "Width": rect.width, "Height": rect.height]]
+}
+let strip = CGRect(x: 400, y: 700, width: 330, height: 25)
+let codex = fixture(1, CGRect(x: 0, y: 0, width: 1200, height: 800))
+assert(!statusIsCovered([fixture(2, CGRect(x: 0, y: 0, width: 300, height: 300)), codex], before: 1, frame: strip, ownPID: 3))
+assert(statusIsCovered([fixture(2, strip), codex], before: 1, frame: strip, ownPID: 3))
+assert(!statusIsCovered([fixture(3, strip), codex], before: 1, frame: strip, ownPID: 3))
+assert(!statusIsCovered([fixture(2, strip, alpha: 0), codex], before: 1, frame: strip, ownPID: 3))
+assert(!statusIsCovered([codex, fixture(2, strip)], before: 0, frame: strip, ownPID: 3))
+var capture = fixture(2, strip); capture[kCGWindowLayer as String] = 1000
+assert(!statusIsCovered([capture, codex], before: 1, frame: strip, ownPID: 3))
+print("Window visibility checks passed")
+exit(0)
+#else
+
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 330, height: 25),
@@ -50,21 +84,23 @@ let timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
         ownsDisplay = flock(fd, LOCK_EX | LOCK_NB) == 0
         if ownsDisplay { print("display-owner"); fflush(stdout) }
     }
+    let codexPIDs = Set(NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex").map { $0.processIdentifier })
     guard ownsDisplay, !label.stringValue.isEmpty,
-          let front = NSWorkspace.shared.frontmostApplication,
-          front.bundleIdentifier == "com.openai.codex",
           let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
-          let window = windows.first(where: {
-              ($0[kCGWindowOwnerPID as String] as? Int32) == front.processIdentifier &&
+          let index = windows.firstIndex(where: {
+              codexPIDs.contains($0[kCGWindowOwnerPID as String] as? Int32 ?? -1) &&
               ($0[kCGWindowLayer as String] as? Int) == 0 &&
-              (($0[kCGWindowBounds as String] as? [String: CGFloat])?["Width"] ?? 0) >= 500
+              (windowRect($0)?.width ?? 0) >= 500
           }),
-          let bounds = window[kCGWindowBounds as String] as? [String: CGFloat],
-          let x = bounds["X"], let y = bounds["Y"], let w = bounds["Width"], let h = bounds["Height"],
+          let bounds = windowRect(windows[index]),
           let screen = NSScreen.screens.first
     else { panel.orderOut(nil); reportVisibility(false); return }
+    let strip = CGRect(x: bounds.midX - 165, y: bounds.maxY - 30, width: 330, height: 25)
+    guard !statusIsCovered(windows, before: index, frame: strip, ownPID: getpid()) else {
+        panel.orderOut(nil); reportVisibility(false); return
+    }
     // shortcut: bottom-centre attachment, use a public composer slot if Codex adds one.
-    let origin = NSPoint(x: x + (w - 330) / 2, y: screen.frame.maxY - y - h + 5)
+    let origin = NSPoint(x: strip.minX, y: screen.frame.maxY - strip.maxY)
     panel.setFrameOrigin(origin)
     panel.orderFrontRegardless()
     reportVisibility(panel.isVisible)
@@ -72,3 +108,4 @@ let timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
 RunLoop.main.add(timer, forMode: .common)
 app.run()
 close(fd)
+#endif
