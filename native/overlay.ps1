@@ -11,6 +11,18 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 using System.Globalization;
+using System.Drawing.Imaging;
+public class MeterIcon : PictureBox {
+    public float ImageAlpha = 1;
+    protected override void OnPaint(PaintEventArgs e) {
+        if (Image == null) return;
+        using (var attributes = new ImageAttributes()) {
+            var matrix = new ColorMatrix(); matrix.Matrix33 = ImageAlpha;
+            attributes.SetColorMatrix(matrix);
+            e.Graphics.DrawImage(Image, ClientRectangle, 0, 0, Image.Width, Image.Height, GraphicsUnit.Pixel, attributes);
+        }
+    }
+}
 public class TokenSpeedOverlay : Form {
     [StructLayout(LayoutKind.Sequential)] struct Rect { public int Left, Top, Right, Bottom; }
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
@@ -18,9 +30,10 @@ public class TokenSpeedOverlay : Form {
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out Rect r);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
     [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] static extern bool SystemParametersInfo(uint action, uint param, out bool value, uint flags);
     readonly Label speedField, unitField, cacheField;
     readonly Font numberFont, labelFont;
-    readonly PictureBox gaugeIcon, cacheIcon;
+    readonly MeterIcon gaugeIcon, cacheIcon;
     readonly float scale;
     readonly Color numberColor, mutedColor = Color.FromArgb(140, 140, 140);
     readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
@@ -32,6 +45,8 @@ public class TokenSpeedOverlay : Form {
     bool ownsDisplay;
     bool disposed;
     bool? reportedVisible;
+    string activity = "idle";
+    bool speedFresh, animating, muted;
     void ReportVisibility(bool visible) {
         if (!ownsDisplay || reportedVisible == visible) return;
         reportedVisible = visible; Console.WriteLine(visible ? "display-visible" : "display-hidden"); Console.Out.Flush();
@@ -55,15 +70,16 @@ public class TokenSpeedOverlay : Form {
         var view = new Label();
         view.AutoSize = false; view.BackColor = Color.Transparent;
         view.Font = numeric ? numberFont : labelFont; view.ForeColor = numeric ? numberColor : mutedColor;
-        view.TextAlign = numeric ? ContentAlignment.MiddleRight : ContentAlignment.MiddleLeft;
+        view.TextAlign = ContentAlignment.MiddleLeft;
         int y = Px(2) + (numeric ? (int)Math.Round(BaselineOffset(labelFont) - BaselineOffset(numberFont)) : 0);
         view.SetBounds(Px(x), y, Px(width), Px(22)); view.Text = value; Controls.Add(view); return view;
     }
-    PictureBox AddIcon(string root, string name, int x) {
+    MeterIcon AddIcon(string root, string name, int x) {
         Image image;
         using (var source = Image.FromFile(System.IO.Path.Combine(root, name + ".png"))) image = new Bitmap(source);
-        var view = new PictureBox(); view.BackColor = Color.Transparent; view.Image = image;
-        view.SizeMode = PictureBoxSizeMode.Zoom; view.SetBounds(Px(x), Px(6), Px(14), Px(14));
+        var view = new MeterIcon(); view.BackColor = Color.Transparent; view.Image = image;
+        float textCenter = Px(2) + BaselineOffset(labelFont) - numberFont.SizeInPoints * DeviceDpi / 72f * 0.35f;
+        view.SetBounds(Px(x), (int)Math.Round(textCenter-Px(7)), Px(14), Px(14));
         view.TabStop = false; Controls.Add(view); return view;
     }
     public TokenSpeedOverlay(bool suppressWindow, string iconRoot) {
@@ -109,7 +125,20 @@ public class TokenSpeedOverlay : Form {
         double parsed;
         return Double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed) && !Double.IsNaN(parsed) && !Double.IsInfinity(parsed) && parsed >= 0 && parsed <= max;
     }
+    void UpdateActivity() {
+        bool animations;
+        animating = activity == "generating" && SystemParametersInfo(0x1042, 0, out animations, 0) && animations;
+        gaugeIcon.ImageAlpha = animating ? (float)(0.8 + 0.2 * Math.Sin(Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency * Math.PI / 0.9)) : 1;
+        gaugeIcon.Invalidate();
+        muted = activity == "tool" || (activity == "generating" && !speedFresh);
+        speedField.ForeColor = muted ? Color.FromArgb((numberColor.R+mutedColor.R)/2, (numberColor.G+mutedColor.G)/2, (numberColor.B+mutedColor.B)/2) : numberColor;
+        AccessibleDescription = activity + (speedFresh ? "; recent approximate speed" : "; previous approximate speed");
+    }
     void ApplyReading(string input) {
+        var frame = input.Split('\t');
+        bool valid = frame.Length == 3 && Array.IndexOf(new[] { "idle", "generating", "tool", "complete" }, frame[1]) >= 0 && (frame[2] == "0" || frame[2] == "1");
+        input = valid ? frame[0] : "";
+        activity = valid ? frame[1] : "idle"; speedFresh = valid && frame[2] == "1";
         string speed = "", cache = "", prefix = "\u4f1a\u8bdd\u7f13\u5b58 ";
         var parts = input.Split(new[] { "   \u00b7   " }, StringSplitOptions.None);
         if (parts.Length == 2 && parts[0].EndsWith(" t/s", StringComparison.Ordinal) && parts[1].StartsWith(prefix, StringComparison.Ordinal)) {
@@ -118,15 +147,21 @@ public class TokenSpeedOverlay : Form {
             bool validCache = cache == "--" || (cache.EndsWith("%", StringComparison.Ordinal) && Number(cache.Substring(0, cache.Length - 1), 100));
             if (!validSpeed || !validCache) { speed = ""; cache = ""; }
         }
+        if (speed.Length == 0 || cache.Length == 0) { activity = "idle"; speedFresh = false; }
         speedField.Text = speed; cacheField.Text = cache;
+        speedField.Width = Math.Min(Px(48), TextRenderer.MeasureText(speed, numberFont, Size.Empty, TextFormatFlags.NoPadding).Width+Px(6));
+        unitField.Left = speedField.Right;
+        UpdateActivity();
         renderedText = speed.Length == 0 || cache.Length == 0 ? "" : speedField.Text + " t/s   \u00b7   " + prefix + cacheField.Text;
         var widths = new string[10]; int iconCount = 0;
         foreach (Control view in Controls) if (view is PictureBox) iconCount++;
         for (int i = 0; i < 10; i++) widths[i] = TextRenderer.MeasureText(i.ToString(CultureInfo.InvariantCulture), numberFont).Width.ToString(CultureInfo.InvariantCulture);
         Console.WriteLine(String.Format(CultureInfo.InvariantCulture,
-            "display-layout\t{{\"speedX\":{0},\"speedWidth\":{1},\"cacheGroupX\":{2},\"cacheX\":{3},\"cacheWidth\":{4},\"digitWidths\":[{5}],\"iconCount\":{6},\"fontSize\":{7},\"speedBaseline\":{8},\"unitBaseline\":{9},\"bottomInset\":27}}",
+            "display-layout\t{{\"speedX\":{0},\"speedWidth\":{1},\"cacheGroupX\":{2},\"cacheX\":{3},\"cacheWidth\":{4},\"digitWidths\":[{5}],\"iconCount\":{6},\"fontSize\":{7},\"speedBaseline\":{8},\"unitBaseline\":{9},\"bottomInset\":27,\"unitX\":{10},\"speedGroupEnd\":{11},\"iconEnd\":{12},\"iconCenter\":{13},\"textCenter\":{14},\"activity\":\"{15}\",\"speedFresh\":{16},\"muted\":{17},\"animating\":{18},\"pulseAlpha\":{19}}}",
             speedField.Left, speedField.Width, cacheIcon.Left, cacheField.Left, cacheField.Width, String.Join(",", widths), iconCount, numberFont.SizeInPoints,
-            speedField.Top + BaselineOffset(numberFont), unitField.Top + BaselineOffset(labelFont)));
+            speedField.Top + BaselineOffset(numberFont), unitField.Top + BaselineOffset(labelFont), unitField.Left, Px(98), gaugeIcon.Right,
+            gaugeIcon.Top+gaugeIcon.Height/2f, Px(2)+BaselineOffset(labelFont)-numberFont.SizeInPoints*DeviceDpi/72f*0.35f,
+            activity, speedFresh ? "true" : "false", muted ? "true" : "false", animating ? "true" : "false", gaugeIcon.ImageAlpha));
         Console.WriteLine("display-text\t" + renderedText); Console.Out.Flush();
     }
     void Tick(object sender, EventArgs e) {
@@ -138,6 +173,7 @@ public class TokenSpeedOverlay : Form {
         if (ownsDisplay && lastInput != text) {
             lastInput = text; ApplyReading(text);
         }
+        if (ownsDisplay) UpdateActivity();
         var h = GetForegroundWindow(); uint id; GetWindowThreadProcessId(h, out id);
         bool codex = false;
         try {

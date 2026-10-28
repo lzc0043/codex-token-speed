@@ -10,7 +10,8 @@ const toolItems = new Set(['CommandExecution', 'McpToolCall', 'DynamicToolCall',
 export class Usage {
   constructor() { this.reset(null); }
   reset(turnId) {
-    Object.assign(this, { turnId, completed: false, tps: this.tps ?? null, cache: this.cache ?? null, previousEnd: null, seen: this.seen ?? new Set() });
+    Object.assign(this, { turnId, completed: false, activity: turnId ? 'generating' : 'idle', speedFresh: false,
+      tools: new Set(), runningTools: new Set(), tps: this.tps ?? null, cache: this.cache ?? null, previousEnd: null, seen: this.seen ?? new Set() });
     this.clearWindow();
   }
   clearWindow() { this.first = null; this.last = null; this.toolStart = null; }
@@ -22,9 +23,22 @@ export class Usage {
       if (this.turnId !== p.turn_id) this.reset(p.turn_id);
       return;
     }
-    if (record.type === 'event_msg' && p.type === 'task_complete') {
+    if (this.turnId && p.turn_id && p.turn_id !== this.turnId) return;
+    if (record.type === 'event_msg' && ['task_complete', 'turn_aborted'].includes(p.type)) {
       if (p.turn_id === this.turnId) {
         this.completed = true;
+        this.activity = p.type === 'task_complete' ? 'complete' : 'idle';
+        this.tools.clear();
+        this.runningTools.clear();
+      }
+      return;
+    }
+    if (record.type === 'response_item' && !this.completed && typeof p.call_id === 'string' && p.call_id.length <= 512) {
+      if (['function_call', 'custom_tool_call'].includes(p.type)) {
+        if (this.tools.size < 256) this.tools.add(p.call_id);
+        this.activity = 'tool'; this.speedFresh = false;
+      } else if (['function_call_output', 'custom_tool_call_output'].includes(p.type) && this.tools.delete(p.call_id)) {
+        this.activity = this.tools.size || this.runningTools.size ? 'tool' : 'generating'; this.speedFresh = false;
       }
       return;
     }
@@ -32,8 +46,15 @@ export class Usage {
       if (this.turnId && p.turn_id && p.turn_id !== this.turnId) return;
       if (!this.turnId && p.turn_id) this.turnId = p.turn_id;
       const start = number(p.started_at_ms), end = number(p.completed_at_ms), type = p.item?.type;
+      if (!this.completed && toolItems.has(type) && typeof p.item?.id === 'string') {
+        if (p.type === 'item_started' && this.runningTools.size < 256) { this.runningTools.add(p.item.id); this.speedFresh = false; }
+        else if (p.type === 'item_completed') this.runningTools.delete(p.item.id);
+        this.activity = this.tools.size || this.runningTools.size ? 'tool' : 'generating';
+      }
       if (start === null || (this.previousEnd !== null && start < this.previousEnd)) return;
       if (modelItems.has(type)) {
+        if (!this.completed && !this.tools.size && !this.runningTools.size) this.activity = 'generating';
+        if (!this.completed && this.first === null) this.speedFresh = false;
         this.first = this.first === null ? start : Math.min(this.first, start);
         if (end !== null && end >= start) this.last = Math.max(this.last ?? end, end);
       } else if (toolItems.has(type) && this.first !== null && start >= this.first) {
@@ -56,7 +77,7 @@ export class Usage {
     } else return;
     if (!usage || !cumulative) return;
     const counts = ['input_tokens', 'cached_input_tokens', 'output_tokens', 'total_tokens'].map(k => number(cumulative[k]));
-    if (counts.some(n => n === null)) { this.tps = null; this.cache = null; this.clearWindow(); return; }
+    if (counts.some(n => n === null)) { this.tps = null; this.cache = null; this.speedFresh = false; this.clearWindow(); return; }
     const key = counts.join(':');
     if (this.seen.has(key)) return;
     this.seen.add(key);
@@ -73,10 +94,11 @@ export class Usage {
     const elapsed = end === null || this.first === null ? null : end - this.first;
     this.tps = elapsed > 0 && output > 0 ? output * 1000 / elapsed : null;
     if (!Number.isFinite(this.tps)) this.tps = null;
+    this.speedFresh = this.tps !== null;
     if (end !== null) this.previousEnd = end;
     this.clearWindow();
   }
-  snapshot() { return { tps: this.tps, cacheHit: this.cache, completed: this.completed }; }
+  snapshot() { return { tps: this.tps, cacheHit: this.cache, completed: this.completed, activity: this.activity, speedFresh: this.speedFresh }; }
 }
 
 export class SessionReader {
@@ -89,7 +111,7 @@ export class SessionReader {
   async locate(threadId) {
     if (!threadPattern.test(threadId)) return null;
     if (this.paths.has(threadId)) return this.paths.get(threadId);
-    if (Date.now() - this.scanned < 5000) return null;
+    if (Date.now() - this.scanned < 500) return null;
     this.scanned = Date.now();
     for (const dir of ['sessions', 'archived_sessions']) {
       let names;

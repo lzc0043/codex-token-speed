@@ -84,7 +84,7 @@ func field(_ text: String, x: CGFloat, width: CGFloat, numeric: Bool = false) ->
     let view = NSTextField(labelWithString: text)
     view.frame = NSRect(x: x, y: 4, width: width, height: 18)
     view.font = numeric ? numberFont : .systemFont(ofSize: 11)
-    view.alignment = numeric ? .right : .left
+    view.alignment = .left
     view.textColor = numeric ? numberColor : mutedColor
     view.drawsBackground = false
     panel.contentView?.addSubview(view)
@@ -114,18 +114,27 @@ let baseline = unitField.frame.maxY - unitField.firstBaselineOffsetFromTop
 for view in [speedField, cacheField] {
     view.frame.origin.y += baseline - (view.frame.maxY - view.firstBaselineOffsetFromTop)
 }
+let textCenter = baseline + numberFont.capHeight / 2
+for view in [gaugeIcon, cacheIcon] { view.frame.origin.y = textCenter - view.frame.height / 2 }
 panel.setAccessibilityLabel("Codex Token 速度计，近似输出速度与会话缓存命中率")
 
 let previewIndex = CommandLine.arguments.firstIndex(of: "--preview")
 let previewPath = previewIndex.flatMap { $0 + 1 < CommandLine.arguments.count ? CommandLine.arguments[$0 + 1] : nil }
 if CommandLine.arguments.contains("--dark-preview") { panel.appearance = NSAppearance(named: .darkAqua) }
 var lastAppearance: NSAppearance.Name?
+var activity = "idle", speedFresh = false, animating = false
 func updateColors() {
     let appearance = panel.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
     guard appearance != lastAppearance else { return }
     lastAppearance = appearance
     let color = NSColor(calibratedWhite: appearance == .darkAqua ? 0.8 : 0.4, alpha: 1)
     speedField.textColor = color; cacheField.textColor = color
+}
+func updateActivity() {
+    animating = activity == "generating" && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    gaugeIcon.alphaValue = animating ? 0.8 + 0.2 * sin(ProcessInfo.processInfo.systemUptime * .pi / 0.9) : 1
+    let muted = activity == "tool" || (activity == "generating" && !speedFresh)
+    speedField.alphaValue = muted ? 0.55 : 1; unitField.alphaValue = speedField.alphaValue
 }
 func savePreview() {
     guard let path = previewPath, let view = panel.contentView,
@@ -143,7 +152,11 @@ func savePreview() {
     catch { fputs("Cannot save meter preview\n", stderr) }
 }
 
-func applyReading(_ text: String) -> String {
+func applyReading(_ input: String) -> String {
+    let frame = input.components(separatedBy: "\t")
+    let valid = frame.count == 3 && ["idle", "generating", "tool", "complete"].contains(frame[1]) && ["0", "1"].contains(frame[2])
+    let text = valid ? frame[0] : ""
+    activity = valid ? frame[1] : "idle"; speedFresh = valid && frame[2] == "1"
     let parts = text.components(separatedBy: "   ·   ")
     var speed = "", cache = ""
     if parts.count == 2 && parts[0].hasSuffix(" t/s") && parts[1].hasPrefix("会话缓存 ") {
@@ -153,7 +166,13 @@ func applyReading(_ text: String) -> String {
         let validCache = cache == "--" || (percent.map { $0.isFinite && (0...100).contains($0) } ?? false)
         if !validSpeed || !validCache { speed = ""; cache = "" }
     }
+    if speed.isEmpty || cache.isEmpty { activity = "idle"; speedFresh = false }
     speedField.stringValue = speed; cacheField.stringValue = cache
+    speedField.frame.size.width = min(42, ceil((speed as NSString).size(withAttributes: [.font: numberFont]).width) + 4)
+    unitField.frame.origin.x = speedField.frame.maxX
+    updateActivity()
+    let phase = ["idle": "闲置", "generating": "模型请求中", "tool": "执行工具", "complete": "已完成"][activity]!
+    panel.setAccessibilityLabel("Codex Token 速度计，\(phase)，\(speedFresh ? "最近有效" : "历史")近似输出速度与会话缓存命中率")
     let result = speed.isEmpty || cache.isEmpty ? "" : "\(speedField.stringValue) t/s   ·   会话缓存 \(cacheField.stringValue)"
     if !result.isEmpty { savePreview() }
     let widths = (0...9).map { (String($0) as NSString).size(withAttributes: [.font: numberFont]).width }
@@ -162,7 +181,11 @@ func applyReading(_ text: String) -> String {
         "digitWidths": widths, "iconCount": panel.contentView!.subviews.filter { $0 is NSImageView }.count, "fontSize": numberFont.pointSize,
         "speedBaseline": speedField.frame.maxY - speedField.firstBaselineOffsetFromTop,
         "unitBaseline": unitField.frame.maxY - unitField.firstBaselineOffsetFromTop, "bottomInset": 27,
-        "fullScreenSupport": panel.collectionBehavior.contains(.canJoinAllApplications)]
+        "fullScreenSupport": panel.collectionBehavior.contains(.canJoinAllApplications),
+        "unitX": unitField.frame.minX, "speedGroupEnd": separator.frame.minX,
+        "iconEnd": gaugeIcon.frame.maxX, "iconCenter": gaugeIcon.frame.midY, "textCenter": textCenter,
+        "activity": activity, "speedFresh": speedFresh, "muted": speedField.alphaValue < 1,
+        "animating": animating, "pulseAlpha": gaugeIcon.alphaValue]
     if let json = try? JSONSerialization.data(withJSONObject: layout), let value = String(data: json, encoding: .utf8) {
         print("display-layout\t" + value)
     }
@@ -207,6 +230,7 @@ let timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
         if ownsDisplay { print("display-owner"); fflush(stdout) }
     }
     updateColors()
+    updateActivity()
     if ownsDisplay && lastInput != text {
         lastInput = text; renderedText = applyReading(text)
         print("display-text\t" + renderedText); fflush(stdout)

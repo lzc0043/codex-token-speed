@@ -2,9 +2,9 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { SessionReader } from './metrics.mjs';
 import { ActiveSession } from './ipc.mjs';
-import { startDisplay, textFor } from './overlay.mjs';
+import { startDisplay, messageFor } from './overlay.mjs';
 
-const version = '0.3.4';
+const version = '0.3.5';
 const home = process.env.CODEX_HOME || join(homedir(), '.codex');
 const headless = process.argv.includes('--headless');
 const reader = new SessionReader(home);
@@ -28,13 +28,13 @@ async function tick() {
     const route = active.snapshot();
     if (route.threadId !== currentThread) {
       currentThread = route.threadId;
-      Object.assign(state, { tps: null, cacheHit: null, status: route.status });
-      if (display?.stdin.writable) display.stdin.write('\n');
+      Object.assign(state, { tps: null, cacheHit: null, activity: 'idle', speedFresh: false, status: route.status });
+      if (display?.stdin.writable) display.stdin.write(messageFor(state) + '\n');
     }
     const metrics = await reader.readSelected(route, () => active.snapshot());
     if (!metrics) {
       const latest = active.snapshot();
-      Object.assign(state, { tps: null, cacheHit: null, status: latest.status });
+      Object.assign(state, { tps: null, cacheHit: null, activity: 'idle', speedFresh: false, status: latest.status });
       pendingTick = true; return;
     }
     state = { ...state, ...metrics, status: route.status };
@@ -43,9 +43,9 @@ async function tick() {
       display = startDisplay(report, update => Object.assign(state, update));
       display.on('exit', code => { state.overlay = 'stopped'; state.overlayVisible = false; if (code) report(`Display exited (${code})`); });
     }
-  } catch (error) { state.status = 'error'; state.tps = null; state.cacheHit = null; report(error.message); }
+  } catch (error) { state.status = 'error'; state.tps = null; state.cacheHit = null; state.activity = 'idle'; state.speedFresh = false; report(error.message); }
   finally {
-    if (display?.stdin.writable && display.stdin.writableLength < 4096) display.stdin.write(textFor(state) + '\n');
+    if (display?.stdin.writable && display.stdin.writableLength < 4096) display.stdin.write(messageFor(state) + '\n');
     busy = false;
     if (pendingTick) { pendingTick = false; queueMicrotask(tick); }
   }

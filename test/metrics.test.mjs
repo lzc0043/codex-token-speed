@@ -30,9 +30,41 @@ const legacy = record => ({ type: 'event_msg', payload: { type: 'token_count', i
 const done = { type: 'event_msg', payload: { type: 'task_complete', turn_id: 'one', duration_ms: 2000 } };
 const model = (start = 0, end = 2000, turn = 'one', type = 'Reasoning') => ({ type: 'event_msg', payload: { type: 'item_completed', turn_id: turn, item: { type }, started_at_ms: start, completed_at_ms: end } });
 
+test('generation, parallel tools, fresh usage and completion change feedback without inventing speed', () => {
+  const m = new Usage();
+  const tool = (type, call_id) => ({ type: 'response_item', payload: { type, call_id } });
+  assert.equal(m.snapshot().activity, 'idle');
+  m.ingest(begin()); assert.equal(m.snapshot().activity, 'generating');
+  assert.equal(m.snapshot().speedFresh, false); assert.equal(m.snapshot().tps, null);
+  m.ingest(model()); m.ingest(usage()); assert.equal(m.snapshot().speedFresh, true);
+  m.ingest(tool('function_call', 'a')); m.ingest(tool('custom_tool_call', 'b'));
+  assert.equal(m.snapshot().activity, 'tool'); assert.equal(m.snapshot().tps, 10);
+  m.ingest(tool('function_call_output', 'a')); assert.equal(m.snapshot().activity, 'tool');
+  m.ingest(tool('custom_tool_call_output', 'b')); assert.equal(m.snapshot().activity, 'generating');
+  assert.equal(m.snapshot().speedFresh, false); assert.equal(m.snapshot().tps, 10);
+  m.ingest(model(3000, 4000)); m.ingest(usage(2)); assert.equal(m.snapshot().speedFresh, true);
+  m.ingest(done); assert.equal(m.snapshot().activity, 'complete');
+  m.ingest(tool('function_call', 'late')); assert.equal(m.snapshot().activity, 'complete');
+  m.ingest(begin('two'));
+  m.ingest({ type: 'event_msg', payload: { type: 'turn_aborted', turn_id: 'one' } });
+  assert.equal(m.snapshot().activity, 'generating');
+  m.ingest({ type: 'event_msg', payload: { type: 'turn_aborted', turn_id: 'two' } });
+  assert.equal(m.snapshot().activity, 'idle');
+});
+
+test('tool item lifecycle and persisted call records must both settle before generation resumes', () => {
+  const m = new Usage(); m.ingest(begin());
+  const item = type => ({ type: 'event_msg', payload: { type, turn_id: 'one', item: { type: 'McpToolCall', id: 'item-a' }, started_at_ms: 2000, completed_at_ms: 3000 } });
+  m.ingest({ type: 'response_item', payload: { type: 'function_call', call_id: 'call-a' } });
+  m.ingest(item('item_started')); assert.equal(m.snapshot().activity, 'tool');
+  m.ingest({ type: 'response_item', payload: { type: 'function_call_output', call_id: 'call-a' } });
+  assert.equal(m.snapshot().activity, 'tool');
+  m.ingest(item('item_completed')); assert.equal(m.snapshot().activity, 'generating');
+});
+
 test('modern and legacy duplicate counts are included once, reasoning is a subset', () => {
   const m = new Usage(); m.ingest(begin()); m.ingest(model()); m.ingest(usage()); m.ingest(legacy(usage())); m.ingest(done);
-  assert.deepEqual(m.snapshot(), { tps: 10, cacheHit: 80, completed: true });
+  assert.deepEqual(m.snapshot(), { tps: 10, cacheHit: 80, completed: true, activity: 'complete', speedFresh: true });
 });
 test('legacy-first order is deduplicated and tool execution time never enters the speed window', () => {
   const m = new Usage(); m.ingest(begin()); m.ingest(model());
@@ -56,7 +88,7 @@ test('real-world carriers can have different cumulative scope; legacy cannot cle
 test('a new turn retains the last speed and ignores late previous-turn records and duplicates', () => {
   const m = new Usage(); m.ingest(begin()); m.ingest(model()); m.ingest(usage()); m.ingest(begin('two'));
   m.ingest(usage()); m.ingest(legacy(usage()));
-  assert.deepEqual(m.snapshot(), { tps: 10, cacheHit: 80, completed: false });
+  assert.deepEqual(m.snapshot(), { tps: 10, cacheHit: 80, completed: false, activity: 'generating', speedFresh: false });
   m.ingest(model(3000, 4000, 'two'));
   m.ingest(usage(2, 'two'));
   assert.equal(m.snapshot().tps, 20);
@@ -107,13 +139,26 @@ test('reader waits for a complete JSONL line, resets truncated files, and isolat
     const reader = new SessionReader(root);
     assert.equal((await reader.read(id)).cacheHit, null);
     await appendFile(file, full.slice(100) + '\n' + JSON.stringify(done) + '\n');
-    assert.deepEqual(await reader.read(id), { tps: 10, cacheHit: 80, completed: true });
+    assert.deepEqual(await reader.read(id), { tps: 10, cacheHit: 80, completed: true, activity: 'complete', speedFresh: true });
     const id2 = id.slice(0, -1) + 'b';
     assert.equal((await reader.read(id2)).cacheHit, null);
     await writeFile(file, JSON.stringify(usage()) + '\n');
     const snapshot = await reader.read(id);
     assert.equal(snapshot.cacheHit, 80); assert.equal(snapshot.tps, null);
     assert.equal((await reader.read('../../auth.json')).cacheHit, null);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+test('a newly created selected chat becomes readable within the selection recovery budget', { timeout: 3000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'token-speed-new-chat-'));
+  try {
+    const reader = new SessionReader(root);
+    assert.equal((await reader.read(id)).cacheHit, null);
+    await mkdir(join(root, 'sessions'), { recursive: true });
+    await writeFile(join(root, 'sessions', `rollout-${id}.jsonl`), [begin(), model(), usage()].map(JSON.stringify).join('\n')+'\n');
+    const until = Date.now()+1500;
+    let state;
+    do { await new Promise(resolve => setTimeout(resolve, 30)); state = await reader.read(id); } while (state.cacheHit === null && Date.now()<until);
+    assert.equal(state.cacheHit, 80); assert.equal(state.activity, 'generating');
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 test('tail truncation never invents a missing model output window', async () => {

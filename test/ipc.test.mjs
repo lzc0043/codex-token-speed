@@ -5,7 +5,7 @@ import { createServer } from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { textFor } from '../scripts/overlay.mjs';
+import { textFor, messageFor } from '../scripts/overlay.mjs';
 const id = '00000000-0000-4000-8000-000000000001';
 const event = (conversationId = id, following = true, sourceClientId = 'window-one', hostId = 'local') => ({
   type: 'broadcast', method: 'thread-stream-following-changed', sourceClientId, params: { conversationId, following, hostId },
@@ -38,6 +38,9 @@ test('UI shows speed and cache without an approximation symbol; missing data sta
   assert.equal(textFor({ tps: 42, cacheHit: 0 }), '42 t/s   ·   会话缓存 0.0%');
   assert.equal(textFor({ tps: null, cacheHit: null }), '');
   assert.equal(textFor({ tps: null, cacheHit: 80 }), '-- t/s   ·   会话缓存 80.0%');
+  assert.equal(textFor({ activity: 'generating' }), '-- t/s   ·   会话缓存 --');
+  assert.equal(messageFor({ tps: 33, cacheHit: 98.4, activity: 'generating', speedFresh: false }), '33 t/s   ·   会话缓存 98.4%\tgenerating\t0');
+  assert.equal(messageFor({ activity: 'invalid\tstate', speedFresh: 'true' }), '\tidle\t0');
 });
 test('refreshes missed selection notifications without dropping the current route', { timeout: 12000 }, async () => {
   const home = await mkdtemp(join(tmpdir(), 'token-speed-ipc-'));

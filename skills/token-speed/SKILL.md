@@ -7,4 +7,6 @@ description: 查询 Codex Token 速度计的 t/s、缓存命中率和自动显�
 
 解释指标时：t/s 是最近有时间窗口的模型输出近似速度，缓存命中率是会话累计缓存输入占比。缺失值保持 `--`，不能把上下文占用率解释成缓存命中率。
 
+activity 的 generating 表示模型请求阶段，包含等待响应；tool 表示工具未全部返回；complete 为完成；idle 为闲置或取消。speedFresh=false 表示当前显示的是历史有效速度。呼吸只反馈阶段，不是逐 token 实时测速，减少动态效果开启时不呼吸。
+
 若状态为 disconnected / waiting-session，建议重新打开一个本地聊天以重新发送选中会话事件；multiple-windows 需仅保留一个 Codex 主窗口，remote-session 表示远程日志不在本机。显示进程错误按工具返回报告，不自行修改 Codex 文件、安全策略或开调试端口。

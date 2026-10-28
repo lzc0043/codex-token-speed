@@ -4,10 +4,15 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 
 export function textFor(state) {
-  if (!Number.isFinite(state.tps) && !Number.isFinite(state.cacheHit)) return '';
+  if (!Number.isFinite(state.tps) && !Number.isFinite(state.cacheHit) && !['generating', 'tool'].includes(state.activity)) return '';
   const speed = Number.isFinite(state.tps) ? state.tps.toFixed(0) : '--';
   const cache = Number.isFinite(state.cacheHit) ? `${state.cacheHit.toFixed(1)}%` : '--';
   return `${speed} t/s   ·   会话缓存 ${cache}`;
+}
+
+export function messageFor(state) {
+  const activity = ['idle', 'generating', 'tool', 'complete'].includes(state.activity) ? state.activity : 'idle';
+  return `${textFor(state)}\t${activity}\t${state.speedFresh === true ? 1 : 0}`;
 }
 
 export function startDisplay(report, onState = () => {}) {

@@ -7,6 +7,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { messageFor, textFor } from '../scripts/overlay.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const command = process.platform === 'win32' ? 'powershell.exe' : join(root, 'bin/token-speed-macos');
 const args = process.platform === 'win32' ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'native/overlay.ps1'), '-Headless'] : ['--headless'];
@@ -24,7 +25,7 @@ test('native helpers own a single display, hand over ownership and exit on stdin
       diagnostics.push(() => errors);
       const lines = createInterface({ input: child.stdout });
       owners.push(Promise.race([once(lines, 'line'), once(child, 'exit').then(([code]) => { throw new Error(`Native exited before ownership (${code}): ${errors}`); })]));
-      child.stdin.write('42 t/s   ·   会话缓存 80.0%\n');
+      child.stdin.write(messageFor({ tps: 42, cacheHit: 80, activity: 'complete', speedFresh: true }) + '\n');
       if (i === 0) assert.equal((await owners[0])[0], 'display-owner');
     }
     let secondOwns = false; owners[1].then(() => { secondOwns = true; });
@@ -54,17 +55,40 @@ test('the native text control accepts and confirms successive metric updates', {
     }
   }
   try {
-    for (const text of ['41 t/s   ·   会话缓存 97.0%', '146 t/s   ·   会话缓存 97.0%', '1079 t/s   ·   会话缓存 99.8%', '']) {
-      child.stdin.write(text + '\n');
-      assert.equal(await displayed(), text);
+    for (const state of [
+      { tps: 33, cacheHit: 98.4, activity: 'generating', speedFresh: false },
+      { tps: 33, cacheHit: 98.4, activity: 'tool', speedFresh: false },
+      ...[33, 146, 1079].map(tps => ({ tps, cacheHit: 98.4, activity: 'complete', speedFresh: true })),
+      { activity: 'generating' }, { activity: 'idle' },
+    ]) {
+      child.stdin.write(messageFor(state) + '\n');
+      assert.equal(await displayed(), textFor(state));
       assert.equal(layout.iconCount, 2);
       if (process.platform === 'darwin') assert.equal(layout.fullScreenSupport, true);
       assert.ok(Math.max(...layout.digitWidths) - Math.min(...layout.digitWidths) < 0.05, 'digits must be equally wide');
       assert.ok(Math.abs(layout.speedBaseline - layout.unitBaseline) <= 0.6, 'numbers and units must share a baseline');
       assert.ok(layout.fontSize >= (process.platform === 'win32' ? 9 : 11));
-      const columns = [layout.speedX, layout.speedWidth, layout.cacheGroupX, layout.cacheX, layout.cacheWidth];
+      assert.equal(layout.activity, state.activity);
+      assert.equal(layout.speedFresh, state.speedFresh === true);
+      assert.equal(layout.muted, state.activity === 'tool' || (state.activity === 'generating' && !state.speedFresh));
+      if (state.activity !== 'generating') { assert.equal(layout.animating, false); assert.equal(layout.pulseAlpha, 1); }
+      assert.ok(Math.abs(layout.unitX-layout.speedX-layout.speedWidth) < 1, 'unit must follow the measured number without a reserved gap');
+      assert.ok(layout.speedX-layout.iconEnd <= 8, 'the number must sit next to the gauge');
+      assert.ok(Math.abs(layout.iconCenter-layout.textCenter) <= 0.6, 'icons must align to the text visual centre');
+      const columns = [layout.speedX, layout.speedGroupEnd, layout.cacheGroupX, layout.cacheX, layout.cacheWidth];
       if (!initial) initial = columns; else assert.deepEqual(columns, initial, 'cache columns must not move as the speed gains digits');
     }
+    const pulses = [];
+    for (let i = 0; i < 8; i++) {
+      await new Promise(resolve => setTimeout(resolve, 210));
+      const state = { tps: 33+i%2, cacheHit: 98.4, activity: 'generating', speedFresh: false };
+      child.stdin.write(messageFor(state) + '\n');
+      assert.equal(await displayed(), textFor(state));
+      if (layout.animating) pulses.push(layout.pulseAlpha);
+    }
+    if (pulses.length) assert.ok(Math.max(...pulses)-Math.min(...pulses) > 0.2, 'the rendered gauge must actually breathe while generation is active');
+    child.stdin.write('33 t/s   ·   会话缓存 98.4%\tinvalid\t1\n');
+    assert.equal(await displayed(), ''); assert.equal(layout.activity, 'idle'); assert.equal(layout.animating, false);
     const exited = once(child, 'exit'); child.stdin.end(); assert.equal((await exited)[0], 0, errors);
   } finally { child.kill(); lines.close(); await rm(home, { recursive: true, force: true }); }
 });
