@@ -6,17 +6,16 @@ app.setActivationPolicy(.accessory)
 let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 330, height: 25),
                     styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
 panel.isOpaque = false
-panel.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.94)
+panel.backgroundColor = .clear
 panel.hasShadow = false
 panel.ignoresMouseEvents = true
 panel.hidesOnDeactivate = false
 panel.level = .floating
 panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-panel.contentView?.wantsLayer = true
-panel.contentView?.layer?.cornerRadius = 10
-let label = NSTextField(labelWithString: "≈ -- t/s   ·   缓存命中 --")
+let label = NSTextField(labelWithString: "")
 label.frame = NSRect(x: 8, y: 4, width: 314, height: 18)
-label.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+label.drawsBackground = false
 label.alignment = .center
 label.textColor = .secondaryLabelColor
 panel.contentView?.addSubview(label)
@@ -29,6 +28,12 @@ catch { fputs("Cannot create display lock directory\n", stderr); exit(1) }
 let fd = open(directory + "/display.lock", O_CREAT | O_RDWR | O_NOFOLLOW, S_IRUSR | S_IWUSR)
 if fd < 0 { fputs("Cannot open display lock\n", stderr); exit(1) }
 var ownsDisplay = false
+var reportedVisible: Bool?
+func reportVisibility(_ visible: Bool) {
+    guard ownsDisplay, reportedVisible != visible else { return }
+    reportedVisible = visible
+    print(visible ? "display-visible" : "display-hidden"); fflush(stdout)
+}
 
 DispatchQueue.global().async {
     while let line = readLine() {
@@ -45,7 +50,7 @@ let timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
         ownsDisplay = flock(fd, LOCK_EX | LOCK_NB) == 0
         if ownsDisplay { print("display-owner"); fflush(stdout) }
     }
-    guard ownsDisplay,
+    guard ownsDisplay, !label.stringValue.isEmpty,
           let front = NSWorkspace.shared.frontmostApplication,
           front.bundleIdentifier == "com.openai.codex",
           let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
@@ -57,11 +62,12 @@ let timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
           let bounds = window[kCGWindowBounds as String] as? [String: CGFloat],
           let x = bounds["X"], let y = bounds["Y"], let w = bounds["Width"], let h = bounds["Height"],
           let screen = NSScreen.screens.first
-    else { panel.orderOut(nil); return }
+    else { panel.orderOut(nil); reportVisibility(false); return }
     // shortcut: bottom-centre attachment, use a public composer slot if Codex adds one.
     let origin = NSPoint(x: x + (w - 330) / 2, y: screen.frame.maxY - y - h + 5)
     panel.setFrameOrigin(origin)
     panel.orderFrontRegardless()
+    reportVisibility(panel.isVisible)
 }
 RunLoop.main.add(timer, forMode: .common)
 app.run()

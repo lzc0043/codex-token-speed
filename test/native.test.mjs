@@ -24,7 +24,7 @@ test('native helpers own a single display, hand over ownership and exit on stdin
       diagnostics.push(() => errors);
       const lines = createInterface({ input: child.stdout });
       owners.push(Promise.race([once(lines, 'line'), once(child, 'exit').then(([code]) => { throw new Error(`Native exited before ownership (${code}): ${errors}`); })]));
-      child.stdin.write('≈ 42 t/s   ·   缓存命中 80.0%\n');
+      child.stdin.write('42 t/s   ·   缓存命中 80.0%\n');
       if (i === 0) assert.equal((await owners[0])[0], 'display-owner');
     }
     let secondOwns = false; owners[1].then(() => { secondOwns = true; });

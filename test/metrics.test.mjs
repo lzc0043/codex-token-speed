@@ -38,10 +38,10 @@ test('real-world carriers can have different cumulative scope; legacy cannot cle
     assert.equal(m.snapshot().cacheHit, 80);
   }
 });
-test('a new turn clears values and ignores late previous-turn records and duplicates', () => {
+test('a new turn retains the last speed and ignores late previous-turn records and duplicates', () => {
   const m = new Usage(); m.ingest(begin()); m.ingest(model()); m.ingest(usage()); m.ingest(begin('two'));
   m.ingest(usage()); m.ingest(legacy(usage()));
-  assert.deepEqual(m.snapshot(), { tps: null, cacheHit: 80, completed: false });
+  assert.deepEqual(m.snapshot(), { tps: 10, cacheHit: 80, completed: false });
   m.ingest(model(3000, 4000, 'two'));
   m.ingest(usage(2, 'two'));
   assert.equal(m.snapshot().tps, 20);

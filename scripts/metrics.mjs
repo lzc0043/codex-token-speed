@@ -10,7 +10,7 @@ const toolItems = new Set(['CommandExecution', 'McpToolCall', 'DynamicToolCall',
 export class Usage {
   constructor() { this.reset(null); }
   reset(turnId) {
-    Object.assign(this, { turnId, completed: false, tps: null, cache: this.cache ?? null, previousEnd: null, seen: this.seen ?? new Set() });
+    Object.assign(this, { turnId, completed: false, tps: this.tps ?? null, cache: this.cache ?? null, previousEnd: null, seen: this.seen ?? new Set() });
     this.clearWindow();
   }
   clearWindow() { this.first = null; this.last = null; this.toolStart = null; }

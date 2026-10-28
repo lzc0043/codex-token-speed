@@ -18,21 +18,26 @@ public class TokenSpeedOverlay : Form {
     readonly Label label = new Label();
     readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
     readonly Mutex mutex;
-    volatile string text = "\u2248 -- t/s   \u00b7   \u7f13\u5b58\u547d\u4e2d --";
+    volatile string text = "";
     volatile bool ended;
     bool ownsDisplay;
     bool disposed;
+    bool? reportedVisible;
+    void ReportVisibility(bool visible) {
+        if (!ownsDisplay || reportedVisible == visible) return;
+        reportedVisible = visible; Console.WriteLine(visible ? "display-visible" : "display-hidden"); Console.Out.Flush();
+    }
     protected override bool ShowWithoutActivation { get { return true; } }
     protected override CreateParams CreateParams {
         get { var p = base.CreateParams; p.ExStyle |= 0x08000000 | 0x00000080 | 0x00000020; return p; }
     }
     public TokenSpeedOverlay() {
         FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true;
-        BackColor = Color.FromArgb(36, 36, 36); Opacity = 0.94; Size = new Size(350, 26);
+        BackColor = Color.Magenta; TransparencyKey = BackColor; AllowTransparency = true; Size = new Size(350, 26);
         AccessibleName = "Codex Token Speed: approximate t/s and cache hit rate";
         FormClosed += (sender, e) => Application.ExitThread();
         label.Dock = DockStyle.Fill; label.TextAlign = ContentAlignment.MiddleCenter;
-        label.ForeColor = Color.Gainsboro; label.Font = new Font("Segoe UI", 10);
+        label.BackColor = Color.Transparent; label.ForeColor = Color.Gray; label.Font = new Font("Segoe UI", 9);
         Controls.Add(label);
         string user = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value;
         mutex = new Mutex(false, "Local\\CodexTokenSpeed-" + user);
@@ -56,9 +61,10 @@ public class TokenSpeedOverlay : Form {
             codex = name.Equals("Codex", StringComparison.OrdinalIgnoreCase) || name.Equals("ChatGPT", StringComparison.OrdinalIgnoreCase);
         } catch (Exception) { codex = false; }
         Rect r;
-        if (!ownsDisplay || !codex || IsIconic(h) || !GetWindowRect(h, out r) || r.Right-r.Left < 500) { Hide(); return; }
+        if (!ownsDisplay || text.Length == 0 || !codex || IsIconic(h) || !GetWindowRect(h, out r) || r.Right-r.Left < 500) { Hide(); ReportVisibility(false); return; }
         label.Text = text; Location = new Point(r.Left + (r.Right-r.Left-Width)/2, r.Bottom-Height-5);
         if (!Visible) Show();
+        ReportVisibility(Visible);
     }
     protected override void Dispose(bool disposing) {
         if (disposing && !disposed) {

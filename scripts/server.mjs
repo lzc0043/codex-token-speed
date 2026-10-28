@@ -27,9 +27,9 @@ async function tick() {
     const metrics = route.threadId ? await reader.read(route.threadId) : { tps: null, cacheHit: null };
     state = { ...state, ...metrics, status: route.status };
     if (!display) {
-      state.overlay = 'running';
-      display = startDisplay(report);
-      display.on('exit', code => { state.overlay = 'stopped'; if (code) report(`Display exited (${code})`); });
+      Object.assign(state, { overlay: 'standby', overlayOwner: false, overlayVisible: false });
+      display = startDisplay(report, update => Object.assign(state, update));
+      display.on('exit', code => { state.overlay = 'stopped'; state.overlayVisible = false; if (code) report(`Display exited (${code})`); });
     }
   } catch (error) { state.status = 'error'; state.tps = null; state.cacheHit = null; report(error.message); }
   finally {
@@ -59,7 +59,7 @@ async function handle(request) {
     if (typeof p?.protocolVersion !== 'string' || !p.clientInfo || !p.capabilities) return error(-32602, 'Invalid initialize parameters');
     await start();
     return { result: { protocolVersion: versions.includes(p.protocolVersion) ? p.protocolVersion : versions[0],
-      capabilities: { tools: {} }, serverInfo: { name: 'codex-token-speed', version: '0.3.0' } } };
+      capabilities: { tools: {} }, serverInfo: { name: 'codex-token-speed', version: '0.3.1' } } };
   }
   if (method === 'ping') return { result: {} };
   if (method.startsWith('notifications/')) return null;
